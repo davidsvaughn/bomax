@@ -1,6 +1,17 @@
 # BOMAX: Bayesian Optimization using Multi-task Gaussian Process Regression
 
-BOMAX is a Python package for Bayesian Optimization with Multi-task Gaussian Process Regression, designed for efficient optimization of expensive-to-evaluate functions across multiple related tasks, such as evaluating LLM checkpoints across multiple benchmark tasks in order to optimize the average learning curve (i.e. *find the LLM checkpoint with the best average performance across all benchmarks*).
+*Find the LLM checkpoint with the best average performance across multiple benchmarks*
+
+BOMAX is a Python package for Bayesian Optimization with Multi-task Gaussian Process Regression, designed for efficient optimization of expensive-to-evaluate functions across multiple related tasks.
+
+The problem that inspired BOMAX was optimizing LLM learning curves. A learning curve visualizes the performance of a model during training, showing how the performance changes over some time unit (steps/iterations/epochs). In classic ML, the performance is usually measured on a small validation set, sometimes called a *hold-out* set (i.e. 10-20% of the training data is *held out*). The goal is to capture the model parameters at the peak of this curve. However, if we are training/fine-tuning an LLM for multiple uses, our validation set might actually be a combination of many different benchmark tasks. After all, most LLM-leaderbaords rank LLMs by their *average benchmark score*.
+
+Let's say we have a set of model 100 model checkpoints that were saved at regular intervals during training/fine-tuning. Suppose that running a single model on a single benchmark takes 1 minute, and we have 100 benchmark tasks. Running all models on all tasks would take 10000 minutes = 1 week. How could we efficiently estimate the model checkpoint with the highest average benchmark performance without running all model checkpoints through all benchmark tasks?
+
+The key is to use Bayesian Optimization with Multi-task Gaussian Process Regression. 
+
+See here for the full derivation. XXX
+
 
 ## Features
 
