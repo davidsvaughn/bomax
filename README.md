@@ -1,6 +1,6 @@
 # BOMAX: Bayesian Optimization using Multi-task Gaussian Process Regression
 
-## *Find the LLM checkpoint with the best average performance across multiple benchmarks*
+### Find the LLM checkpoint with the best average performance across multiple benchmarks
 
 BOMAX is a Python package for Bayesian Optimization with Multi-task Gaussian Process Regression, designed for efficient optimization of expensive-to-evaluate functions across multiple related tasks.
 
