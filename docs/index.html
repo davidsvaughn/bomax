@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Model Documentation</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+  <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      line-height: 1.6;
+      color: #24292e;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    h1, h2, h3, h4 {
+      border-bottom: 1px solid #eaecef;
+      padding-bottom: 0.3em;
+    }
+    code {
+      font-family: SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
+      background-color: rgba(27,31,35,0.05);
+      border-radius: 3px;
+      padding: 0.2em 0.4em;
+    }
+    blockquote {
+      border-left: 0.25em solid #dfe2e5;
+      padding: 0 1em;
+      color: #6a737d;
+    }
+  </style>
+</head>
+<body>
+  <h2 id="bayesian-optimization-using-multi-task-gaussian-process-regression">Bayesian Optimization using Multi-task Gaussian Process Regression</h2>
+  
+  <!-- <p><a href="https://www.xyzeditor.com/">https://www.xyzeditor.com/</a></p> -->
+  
+  <h3 id="learning-curve-optimization">(Average) Learning Curve Optimization</h3>
+  
+  <p>Problem setup: we have a set of model checkpoints saved periodically during training (usually saved at equally spaced intervals but this is not a requirement). In addition, we have a set of benchmark tasks we can run on a model to get a score. If we chose a single benchmark and ran it on all model checkpoints and then plotted these, with checkpoint number on the x-axis and benchmark score on the y-axis, we would get a <em>learning curve</em> showing how the model improves during training, and then starts to degrade. Typically we are interested in finding the model checkpoint at the peak of this curve. Since the performance data can be noisy, it's often better to maximize a smoothed version (see below image).</p>
+  
+  <div style="display: flex; justify-content: center; margin: 20px 0;">
+    <img src="bench1.png" alt="Learning curve for benchmark 1" style="max-width: 75%; height: auto;">
+  </div>
+  
+  <p> If we were to plot the (smoothed) learning curve for every benchmark, we might notice that some of them are very similar to one another, while others are not. If we were to take all of these learning curves, and average them, we would get an average learning curve (see below). Ideally we would like to find the model checkpoint that maximizes the average curve, because this model performs the best overall on the benchmarks (i.e. has the highest average score - averaged over all benchmarks).</p>
+  
+  <div style="display: flex; justify-content: center; margin: 20px 0;">
+    <img src="bench2.png" alt="Learning curve for benchmark 2" style="max-width: 75%; height: auto;">
+  </div>
+
+  <p>However, running a model checkpoint on a benchmark is costly. Suppose that running a single model on a single benchmark takes 1 minute, and we have 100 model checkpoints and 100 benchmark tasks. Running all models on all tasks would take 10000 minutes = 1 week. This case may be rather extreme, but even in less extreme cases we would like to find ways of reliably estimating the best overall model checkpoint without running all model-task pairs.</p>
+  
+  <h3 id="bayesian-optimization">Bayesian Optimization</h3>
+
+  <p>Bayesian Optimization (BO for short) is a common approach for such optimization scenarios, when the function we are trying to optimize is expensive to compute. Sometimes it's called "black-box" optimization since we treat the function \(f\) as a "black-box" and only have access to it by querying it's value at specific points. The basic approach is to repeatedly query (i.e. evaluate) the function so as to acquire more sample points with which to estimate a regression model, and then use that regression model to optimize the function. Naturally this process is a loop, the main steps being:</p>
+  
+
+  <h4 style="border-bottom: none; margin-bottom: 5px;">Main BO Loop</h4>
+  <ol style="margin-top: 0;"></ol>
+    <li>use the current regression model to decide which point \(x_i\) to query next</li>
+    <li>update the regression model using newly observed function value \(y_i=f(x_i)\)</li>
+  </ol>
+  
+  <p>It's important to remember that the end goal is to find the peak of the curve (i.e. find \(\text{argmax}_x f(x)\)), not really to fit a full regression model to \(f(x)\). Of course, if we had a really good regression model, we could exploit it to easily find the peak. Since we don't, we are naturally more concerned with increasing the quality of the regression model in the region(s) where \(f\) is high, since those are more likely to contain \(f_{max}\). So, there is an inherent trade-off at play during Bayesian optimization between (a) optimizing the overall accuracy of the regression curve (i.e. minimizing the regression error) and (b) optimizing the regression curve itself (i.e. finding the peak).</p>
+  
+  <p>Sometimes this is called the <em>exploration-vs-exploitation</em> trade-off. Since step 2 above is fairly straightforward, this trade-off comes into play only in step 1, where we must decide how to choose the next query point. At any point during the BO loop, we can either (a) poke around in (i.e. exploit) regions where our current regression model has greater certainty that \(f\) is high, or (b) explore regions where the current regression model has less certainty about whether \(f\) is high or low. Clearly it would be useful to have a regression model that can provide uncertainty estimates.</p>
+
+  <h3 id="gaussian-process-regression">Gaussian Process Regression</h3>
+
+  <p><em>Gaussian process regression models</em> are a popular choice for Bayesian optimization, since they provide explicit uncertainty estimates that can be used to guide step 1. Another reason they are convenient for Bayesian optimization is that the priors, marginals, and posterior (conditional) means and variances are all expressible in closed form as multivariate Gaussian (normal) distributions, which makes it easy to repeatedly perform Bayesian updates to our model as we observe more data points.</p>
+  
+  <p>Standard \(GP\) regression is well suited for modeling the learning curve of a single benchmark. What makes a Gaussian Process different from a standard multivariate Gaussian probability distribution is that, in a \(GP\) model, the input space (in this case the space of model benchmarks) is the source of the "multiple dimensions" even though it lies along 1 dimension. Suppose we only save model benchmarks every 50 steps, up to 1000, so we can only make observations \(f(x)\) when \(x\) is drawn from \([0, 50, 100, 150,…, 1000]\).</p> 
+  
+<p>We can still use a \(GP\) regression model to define a continuous function over the entire interval \([0…1000]\). To make things simpler, let's instead define our \(GP\) regression function over a discrete input domain \(X\) of the integers 1 to N: \(X = [1,2,3,…,N]\). We can imagine modeling the vector of function values at each of these input points \(f_X = [f(x_1),…,f(x_N)]\) as a multivariate Gaussian. Before making any observations, our <em>\(GP\) Prior</em> over this domain is defined as a multivariate normal distribution:</p>
+
+\[
+\begin{gather}
+f_X \sim \mathcal{N}(\mu_X, \Sigma_X) \\
+{\scriptstyle s.t.} \\
+\begin{aligned}
+\mu_X &= 0 \\
+\Sigma_X &= K(X,X)
+\end{aligned}
+\end{gather}
+\]
+  
+  <p>where \(K\) is an \(N \times N\) matrix of pair-wise kernel function values \(k(x,x')\) computed on all input pairs \(x,x'\).  This kernel function models the correlation between output function values \(f(x)\) and \(f(x')\). Since the input domain (of model benchmarks) is numeric (as opposed to categorical) we would use an RBF kernel, which represents similarities between input pairs \(x,x'\) as a function of the squared distance between them \(\lVert x - x' \rVert^2\), encoding the intuition that model checkpoints that are closer together are expected to have more similar function values (i.e. benchmark scores) than two checkpoints that are farther apart. The RBF (Radial Basis Function) kernel is expressed as:</p>
+  
+  \[
+  K_{RBF}(x, x') = \gamma^2  \exp{ \left( -\frac{1}{2\sigma^2} \lVert x - x' \rVert^2  \right)}
+  \]
+  
+  <p>where learnable hyperparameters \(\sigma\) and \(\gamma\) represent the input-scale and output-scale, respectively.</p>
+  
+  <p>Now suppose we acquire a set of observations \(O = \{X_O,Y_O\}\) by evaluating the function at a set of points (i.e. model checkpoints) \(X_O = [x_1,x_2,…,x_n]\) to obtain values (i.e. benchmark scores) \(Y_O = [y_1,y_2,…,y_n]\) where \(y_i = f(x_i)\). We could then update the model, conditional on these new observations, to obtain the <em>posterior</em> distribution over the input space \(X\), which is also a multivariate Gaussian:</p>
+  
+\[
+\begin{gather}
+f_X|O \sim  \mathcal{N}(μ_{X}|O , \Sigma_{X}|O) \\
+{\scriptstyle s.t.} \\
+\begin{aligned}
+μ_{X}|O &= K(X_O,X)^T K(X_O,X_O)^{-1}Y_O \\
+\Sigma_{X}|O &= K(X,X) - K(X_O,X)^T K(X_O,X_O)^{-1}K(X_O,X)
+\end{aligned}
+\end{gather}
+\]
+  
+  <p>This is the standard Bayesian update procedure for a \(GP\) regression model. The <em>posterior mean</em> \(μ_{X}|O\) is just an \(N\)-length vector of means  \([\mu_1, \mu_2,…,\mu_N]\) and would be considered the actual "value" of the \(GP\) regression function at each input point \(x_i\), while the <em>posterior covariance</em> \(\Sigma_{X}|O\) is an \(N \times N\) matrix of pairwise variances.  Taking the square root of the diagonal would yield a vector of standard deviations for drawing confidence bands around the regression function.</p>
+  
+  <p>For clarity, we could just as well write an expression, at any particular input point \(x_i\), for the <em>marginal</em> posterior distribution of \(f(x_i)\):</p>
+  
+  \[
+  \begin{gather}
+  f_i|O \sim  \mathcal{N}(μ_{i}|O , \sigma^2_{i}|O) \\
+  {\scriptstyle s.t.} \\
+  \begin{aligned}
+  μ_{i}|O &= K(X_O,x_i)^T K(X_O,X_O)^{-1}Y_O \\
+  \sigma^2_{i}|O &= K(x_i,x_i) - K(X_O,x_i)^T K(X_O,X_O)^{-1}K(X_O,x_i) \\
+  \end{aligned}
+  \end{gather}
+  \]
+  
+  <p>where \(μ_i\) and \(\sigma_i\) are the scalar mean and standard deviation of the <em>marginal</em> distribution at \(x_i\).  This illustrates another nice property of multivariate Gaussians, which is that marginals, which are simply a slice of the full distribution at a particular point \(x_i\), remain Gaussian.</p>
+  
+  <p>This \(GP\) model works perfectly well for the case of optimizing the learning curve of a single benchmark. In this current formulation we would say we are looking for the \(i^*\) (i.e. checkpoint model \(x_i^*\)) that maximizes \(\mu_{i}|O\).</p>
+  
+  <h3 id="optimizing-average">Optimizing the Average of Multiple Outputs</h3>
+
+  <p>But you may recall the objective function we want to maximize is the <em>average learning curve</em> over a set of benchmark tasks. One possible solution might be to fit a separate \(GP\) regression model to each benchmark task, and then average these regression curves afterwards. However, there is almost certainly some relationship (correlation) between many of these learning curves. After all, the benchmark tasks tend to be very similar in nature, in addition to the fact that they are being run on the same set of model checkpoints. Some task pairs may be highly correlated, while others not so much. We would like to be able to share information across similar (correlated) tasks to reduce the number of function evaluations required, but we don't know what these inter-task correlations are <em>a-priori</em>. A multi-task regression method that could jointly estimate these inter-task correlations AND use these correlations to share information between task-specific regression curves would be very useful.</p>
+  
+  <h3 id="multi-task-gaussian-proceses">Multi-Task Gaussian Processes</h3>
+  
+  <p>Well, there exists a well known extension to the standard single-output \(GP\) model called a "multi-output" or "multi-task" Gaussian process. This formulation uses the <em>ICM Kernel</em> (ICM = intrinsic co-regionalization model), which was proposed [here] as a way to induce/learn inter-task correlations. While the previous RBF kernel was defined on input pairs \(x,x'\) drawn from a 1D domain, the multi-task ICM kernel is defined on pairs of input-task tuples \(\langle x,t\rangle ,\langle x',t'\rangle\) drawn from a 2D grid. The ICM kernel \(K_{ICM}\) factors into the Kronecker product of two kernels:</p>
+  
+  \[
+  K_{ICM} \left( \langle x,t\rangle,\langle x',t'\rangle \right) = K_x(x,x') \otimes K_t(t,t')
+  \]
+  
+  <p>In the current scenario, the "inputs" \(x,x'\) are drawn from the set of model checkpoints, and the "tasks" \(t,t'\) are drawn from the set of benchmarks. When we run a given checkpoint model \(x_i\) on a task \(t_j\), the output is a scalar valued score \(y_{ij} = f(x_i,t_j)\) representing the performance of the model on the task. These scores are typically values in the \([0..1]\) range.</p>
+  
+  <p>The \(K_x\) kernel accounts for correlations between two outputs \(f(x,t)\) and \(f(x',t')\) that are due to checkpoint similarities (which we directly relate to inter-checkpoint distance), and the \(K_t\) kernel accounts for output correlations due to inter-task correlations. Since the input space \(x\) is continuous/numerical, \(K_x\) is an RBF kernel as before. However, since tasks are categorical in nature (i.e. no intrinsic ordering) the task kernel \(K_t\) is just P.S.D. matrix of inter-task correlations which is learned from the observed data. Instead of using a full rank matrix, though, \(K_t\) is sometimes represented using a lower rank approximation of the Cholesky factor \(L\) s.t. \(K_t = LL^T\), which helps ensure that \(K_t\) is P.S.D. Additionally, using a lower rank approximation helps encourage the model to learn correlations between tasks.</p>
+  
+  <p>Now we can picture our input space as a 2D matrix (grid) with model checkpoints \(X = [1,2,3,…,N]\) along the horizontal dimension, and the space of all benchmark tasks \(T= [1,2,3,…,M]\) along the vertical dimension. As a notational convenience we sometimes <em>vectorize</em> (i.e. flatten) this \(N \times M\) matrix into a one dimensional <em>all-pairs</em> vector \(V = X \otimes  T\) of length \(MN\), but it represents the exact same search space.</p>
+  
+  <p>Our multi-task \(GP\) defines a posterior mean \(\mu_{ij}|O\) and standard deviation \(\sigma_{ij}|O\) for every checkpoint model \(x_i\) and benchmark task \(t_j\) combination: \(\langle x_i,t_j \rangle\). To be clear, that implies a length-\(MN \) vector of posterior means \( \mu_V|O \) and posterior standard deviations \( \sigma_V|O \). In fact, the multi-task \(GP\) posterior provides a full covariance matrix \(\Sigma_V|O\) of size \(MN \times MN\) which contains all pairwise covariances between all pairs of checkpoint-task combinations. 
+
+    Normally when performing Bayesian Optimization using a multi-task \(GP\), the objective would be to find the optimal checkpoint-task pair. In other words, to find the \(\langle x^*_i,t^*_j \rangle\) such that the posterior mean \(\mu_{ij}|O\) is maximal.</p>
+  
+  <p>But we are interested in summing (averaging) over the task dimension and optimizing only over the checkpoint dimension. So we want to find the \(i^*\) (model checkpoint \(x_i^*\)) where the average over tasks \(\frac{\sum_{j=1}^M \mu_{ij}|O}{M}\) is maximized. We can maximize the sum \(\sum_{j=1}^M \mu_{ij}|O\) instead since max is invariant to division by a constant.</p>
+  
+  <p>But how can we do this? In order to explain the approach, we first need to explain the concept of an <em>acquisition function</em>, and how it is normally used during standard single-output Bayesian Optimization for step 1: using the current regression model to decide which point to query next. An acquisition function is a surrogate function defined in such a way to balance our dueling desires (a) to maximize the current regression model, and (b) to reduce uncertainty in the regression model. It is usually based on the \(GP\) regression model. There are several choices, but one of the most popular is called <em>Expected Improvement</em>.</p>
+  
+  <h3 id="expected-improvement">Expected Improvement</h3>
+  
+  <p>Bayesian Optimization is a sequential process of acquiring observations of the function \(f\) we are trying to optimize. Imagine that as we acquire new observations \(y_o=f(x_o)\), we continually keep track of the maximum function value \(y^*_x\) observed so far for any input \( x \). After every model update step (step 2), we must consider all input points \(x_i\) not yet observed as candidates to query for the next observation. At each of these points, the current \(GP\) posterior yields a marginal posterior mean \(μ_i|O\) and standard deviation \(\sigma_i|O\). These parameters define a Gaussian probability distribution at each point \(x_i\) over all possible values the objective function \(f(x_i)\) might assume at \(x_i\):, 
+    \( f_i \sim \mathcal{N}(μ_i|O , \sigma^2_i|O) \). Using these marginal distributions, we can compute, for each candidate input \(x_i\), the <em>expected value</em> of the amount that \(f(x_i)\) will improve over the current \(y^*\), where the expectation is taken with respect to \( f_i \sim \mathcal{N}(μ_i|O , \sigma^2_i|O) \) (we'll drop the \(|O \) here for convenience):</p>
+  
+  \[
+  \mathbb{E}_{f_i \sim \mathcal{N}(\mu_i, \sigma^2_i)} [\max(0, f(x_i) - y^*)] 
+  =  \mathbb{E}_{f_i} \left[ \max \left(0, \frac{f(x_i) - \mu_i}{\sigma_i} - \frac{y^*-\mu_i}{\sigma_i}\right) \right] \sigma_i
+  \]
+  
+  <p>If \(f(x_i) < y^*\) there is no improvement, so we use \( \max(0,\cdot)\). Now, if we let \(v = \frac{y^*-\mu_i}{\sigma_i}\), then the right side contains an expression of the form: \(\mathbb{E}_{u \sim  \mathcal{N}(0,1)} [\max(0,u-v)]\), which can be solved analytically:</p>
+
+  \[
+  \begin{aligned}
+  \mathbb{E}_{u \sim \mathcal{N}(0,1)} [\max(0,u-v)] 
+  = & \int_{-\infty}^{\infty} \max(0,u-v) \cdot \phi(u) \, du \\
+  = & \int_{v}^{\infty} (u-v) \cdot \phi(u) \, du \\
+  = & \int_{v}^{\infty} u \cdot \phi(u) \, du - v \int_{v}^{\infty} \phi(u) \, du \\
+  = & \ \Bigl[-\phi(u)\Bigr]_{u=v}^{u=\infty} -v \left( \int_{-\infty}^\infty \phi(u)\,du - \int_{-\infty}^v \phi(u)\,du \right) \\
+  = & \ \ \phi(v) - v(1-\Phi(v)) 
+  \end{aligned}
+  \]
+  
+  <p>where \(\phi\) and \(\Phi\) are the standard Gaussian PDF and CDF, respectively. We can further simplify using \(v = \frac{y^*-\mu_i}{\sigma_i}\) plus the identities:</p>
+  <ul>
+    <li>\(\phi(-v) = \phi(v)\)</li>
+    <li>\(\Phi(-v) =1 -\Phi(v)\)</li>
+  </ul>
+  
+  <p>Plugging these back in yields the standard Expected Improvement acquisition function:</p>
+  
+  \[
+  EI(x_i) = (\mu_i-y^*)\Phi \left( \frac{\mu_i - y^*}{\sigma_i} \right) + \sigma_i \phi \left( \frac{\mu_i - y^*}{\sigma_i} \right)
+  \]
+  
+  <p>The \(x_i\) with the greatest \(EI(x_i)\) value would be chosen for the next function evaluation.</p>
+  
+  <h3 id="modification-to-ei">Modification to \(EI\) for Optimizing a Sum</h3>
+  
+  <p>As mentioned before, we are interested in using BO (Bayesian Optimization) to find the model checkpoint that acheives the highest <em>sum of scores</em> over all benchmark tasks \(\sum_{j=1}^M \mu_{ij}|O\), which is equivalent to maximizing the average score (modulo division by a constant). We would like to use an acquisition function like \(EI\), but in its standard form it does not quite work for this modified objective function. At each iteration, we would like to evaluate each possible checkpoint-task pair \(\langle x_i,t_j \rangle\) <em>not</em> based on the expected improvement over the best individual benchmark score observed so far, \(y^*_{xt}\), but instead by the expected improvement in the <em>sum of scores over all tasks</em> for the given checkpoint.</p>
+  
+  <p>One problem with this is that we have no direct observations of this sum. All we have are observations of individual scores \( y_{ij} = f(x_i,t_j) \) that resulted from evaluating arbitrary checkpoint-task combinations. However, as a proxy we can simply do the following: for each candidate checkpoint \(x_i\) compute the sum over all current posterior mean score estimates (i.e. over all \( M \) tasks):</p>
+  
+  \[
+  S_i = \sum_{j=1}^M \mu_{ij}|O
+  \]
+  
+  <p>We could even use actual observations \( y_{ij} \) in place of the posterior means \( \mu_{ij}|O \) for the model-task combos that have been evaluated so far, and use the posterior means \( \mu_{ij}|O \) just for the model-task combos that have not yet been evaluated. This might give a slightly more accurate estimate of the unobserved true sum \(S_i\) for each checkpoint \(x_i\) (although in practice once a value \(y_{ij}\) has been observed and incorporated into the \(GP\) model, the posterior mean \(\mu_{ij}|O\) is usually very close to the observed value \(y_{ij}\)).
+Taking this idea further, we can also use the maximum value \(S^* = \max_{i}{S_i} \) as a proxy for a unobserved <em>highest sum so far</em>.</p>
+
+<p>Now for the purposes of our acquisition function, we would like to be able to treat \(S_i\) as a function of the single candidate pair \(\langle x_i,t_j \rangle\) under evaluation, keeping all else constant. We can acheive this by decomposing the task-sum for a candidate checkpoint \(x_i\):</p>
+  
+  \[
+  S_i = \sum_{j=1}^M \mu_{ij}|O = \mu_{ij} + \sum_{k \neq j} \mu_{ik}|O = f(x_i,t_j) + \sum_{k \neq j} \mu_{ik}|O
+  \]
+  
+  <p>In the last step we replace \( \mu_{ij}|O \) with \( f(x_i,t_j) \), to show that we are using all other posterior means \( \mu_{ik}|O \) basically as point estimates to substitute for actual observations, except for the candidate \(\langle x_i,t_j \rangle\) under evaluation.
+    This allows us to write a modified \(EI\) function such that we compute the expected value of the amount that \(S_i\) will improve over \(S^*\), where the expecatation is taken with respect to the distribution \( f_{ij} \sim \mathcal{N}(\mu_{ij}|O, \sigma^2_{ij}|O) \), which is the \(GP\) marginal distribution of \(f\) at \(\langle x_i,t_j \rangle\) given the current observations \(O\) (again we drop the \(|O \) for convenience):</p>
+  
+  \[
+  \begin{aligned} 
+  EI(x_i,t_j) = & \ \ \mathbb{E}_{f_{ij} \sim \mathcal{N}(\mu_{ij}, \sigma^2_{ij})} [\max(0,S_i - S^*)]  \\
+   = & \ \ \mathbb{E}_{f_{ij}} [\max(0,f(x_i,t_j) + \sum_{k \neq j}^{M} \mu_{ik} - S^*) ]  \\
+   = & \ \ \mathbb{E}_{f_{ij}} [\max(0,f(x_i,t_j)- (S^* -\sum_{k \neq j}^{M} \mu_{ik} ))]  \\
+  & \\
+   =  & \ \ \mathbb{E}_{f_{ij}} \left[ \max \left(0, \frac{f(x_i,t_j) - \mu_{ij}}{\sigma_{ij}} - \frac{(S^* -\sum_{k \neq j}^{M} \mu_{ik})-\mu_{ij}}{\sigma_{ij}}\right) \right] \sigma_{ij}
+  \end{aligned} 
+  \]
+  
+  <p>The purpose of the \(S_i\) decomposition is that it has allowed us, in the last step, to standardize the expression (as before), so once again we have an expression of the form \(\mathbb{E}_{u \sim \mathcal{N}(0,1)} [\max(0,u-v)]\), except this time \(S^* -\sum_{k \neq j}^{M} \mu_{ik}\) has been substituted for \(y^*\). As long as we carry this substitution forward, we can reuse the same result derived earlier:</p>
+
+  \[
+  EI(x_i,t_j) = (\mu_{ij}-S^* +\sum_{k \neq j}^{M} \mu_{ik})\Phi \left( \frac{\mu_{ij} - S^* +\sum_{k \neq j}^{M} \mu_{ik}}{\sigma_{ij}} \right) + \sigma_{ij} \phi \left( \frac{\mu_{ij} - S^* +\sum_{k \neq j}^{M} \mu_{ik}}{\sigma_{ij}} \right)
+  \]
+
+  \[
+  \boxed{EI(x_i,t_j) = (S_i - S^*)\Phi \left( \frac{S_i - S^*}{\sigma_{ij}} \right) + \sigma_{ij} \phi \left( \frac{S_i - S^*}{\sigma_{ij}} \right)}
+  \]
+  
+  <p>The final boxed equation gives the modified \(EI\) formula, which we can maximize in order to choose the next checkpoint-task pair \(\langle x_i,t_j \rangle\) to evaluate. </p>
+
+  <h3>TODO:</h3>
+
+  <p>[Noisy observations... noise term inside kernel matrix (???)... in addition to interpolating between observations to impute (paper!) missing data, regression helps absorb/smooth out noise to reveal underlying pattern.]</p>
+
+</body>
+</html>
