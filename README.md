@@ -1,11 +1,11 @@
-# BOMAX: Bayesian Optimization with Multi-task Acquisition
+# BOMAX: Bayesian Optimization using Multi-task Gaussian Process Regression
 
-BOMAX is a Python package for Bayesian Optimization with Multi-task Acquisition, designed for efficient optimization of expensive-to-evaluate functions across multiple related tasks.
+BOMAX is a Python package for Bayesian Optimization with Multi-task Gaussian Process Regression, designed for efficient optimization of expensive-to-evaluate functions across multiple related tasks, such as evaluating LLM checkpoints across multiple benchmark tasks in order to optimize the average learning curve (i.e. *find the LLM checkpoint with the best average performance across all benchmarks*).
 
 ## Features
 
-- Multi-task Gaussian Process regression
-- Bayesian optimization with Expected Improvement acquisition function
+- Uses BoTorch implementation of Multi-task Gaussian Process
+- Bayesian optimization with modified Expected Improvement acquisition function (for optimizing an average)
 - Efficient sampling strategies for multi-task settings
 - Visualization tools for monitoring optimization progress
 - Support for both CPU and GPU acceleration
