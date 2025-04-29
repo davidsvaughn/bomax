@@ -19,8 +19,8 @@ rank_fraction = -1
 #--------------------------------------------------------------------------
 # SET PARAMETERS
 
-fn = 'phi4-math-4claude.txt'
-# fn = 'phi4-bw-4claude.txt'
+fn = 'perf1.txt'
+# fn = 'perf2.txt'
 
 # rand_seed = 2951
 
@@ -74,11 +74,11 @@ plt.ioff()
 # Load the Data...
 
 # We'll assume you have a CSV with columns:
-# "CHECKPOINT", "TEST_AVERAGE", "TEST_1", "TEST_2", ..., "TEST_71".
+# "CHECKPOINT", "TASK_1", "TASK_2", ....
 current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-data_dir = os.path.join(parent_dir, 'data')
-run_base = os.path.join(parent_dir, 'runs') if local else '/mnt/llm-train/baso/runs'
+# parent_dir = os.path.dirname(current_dir)
+data_dir = os.path.join(current_dir, 'data')
+run_base = os.path.join(current_dir, 'runs') if local else '/mnt/llm-train/baso/runs'
 
 #--------------------------------------------------------------------------
 # remove all empty run directories
@@ -131,9 +131,9 @@ df = pd.read_csv(os.path.join(data_dir, fn), delimiter='\t')
 X_feats = df['CHECKPOINT'].apply(lambda x: int(x.split('-')[1])).values
  
 # Identify test columns (excluding average)
-test_cols = [col for col in df.columns if col.startswith('TEST_') and col != 'TEST_AVERAGE']
-Y_test = df[test_cols].values
-del test_cols
+task_cols = [col for col in df.columns if col.startswith('TASK_')]
+Y_test = df[task_cols].values
+del task_cols
 n,m = Y_test.shape
 
 # sample subset of tasks (possibly)
@@ -154,7 +154,7 @@ log(f'FYI: ei_gamma: {ei_gamma:.4g}')
 #--------------------------------------------------------------------------
 # Train regression model on all data for gold standard
 Y_ref = None
-# Y_ref = Y_test.copy()
+Y_ref = Y_test.copy()
 
 if Y_ref is None:
     sampler = MultiTaskSampler(X_feats, Y_test, 
