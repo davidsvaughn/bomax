@@ -29,7 +29,7 @@ The key to the current software package is a modified version of Expected Improv
   <img src="docs/ei.png" width="60%" /> 
 </p>
 
-See here for the full derivation.
+See [here](https://davidsvaughn.github.io/bomax/) for the [full derivation](https://davidsvaughn.github.io/bomax/).
 
 
 ## Features
