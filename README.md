@@ -23,7 +23,7 @@ The key is to use Bayesian Optimization with Multi-task Gaussian Process Regress
 
 Gaussian process regression models are a popular choice for Bayesian optimization, since they provide explicit uncertainty estimates that can be used to guide step 1. The standard method is through an *acquisition function*, which basically provides a formula for turning the GP uncertainty estimates into the next query point $x_i$. However, the most popular acquisition function, *Expected Improvement*, is not quite suitable for the current problem setting, since it would only be applicable for optimizing a single function (i.e. benchmark), as opposed to an average of multiple functions.
 
-The key to the current software package is a modified version of Expected Improvement for optimizing an average of many functions:
+The key to the current software package is a novel formulation of Expected Improvement for optimizing an average of many functions:
 
 <p align="center">
   <a href="https://davidsvaughn.github.io/bomax/">
