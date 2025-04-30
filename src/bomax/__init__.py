@@ -7,7 +7,6 @@ __version__ = "0.1.0"
 from . import degree
 from . import initialize
 from . import normalize
-from . import plotting
 from . import sampler
 from . import stopping
 from . import utils
