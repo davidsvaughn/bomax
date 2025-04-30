@@ -1,4 +1,4 @@
-# BOMAX: Bayesian Optimization for Maximizing Learning Curves
+# BOMAX: Bayesian Optimization for Maximizing LLM Learning Curves
 
 <p align="center">
   <img src="docs/baso_1280.gif" width="90%" /> 
