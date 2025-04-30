@@ -1,6 +1,6 @@
-# BOMAX: Bayesian Optimization using Multi-task Gaussian Process Regression
+# BOMAX: Bayesian Optimization for Maximizing Learning Curves
 
-### Maximize average benchmark score across multiple LLM checkpoints
+### Using Mult--task Gaussian Process Regression to maximize *average benchmark score* across multiple LLM checkpoints
 
 BOMAX is a Python package for Bayesian Optimization with Multi-task Gaussian Process Regression, designed for efficient optimization of expensive-to-evaluate functions across multiple related tasks.
 
@@ -8,7 +8,9 @@ The problem that inspired BOMAX was optimizing LLM learning curves. A learning c
 
 Let's say we have a set of model 100 model checkpoints that were saved at regular intervals during training/fine-tuning. Suppose that running a single model on a single benchmark takes 1 minute, and we have 100 benchmark tasks. Running all models on all tasks would take 10000 minutes = 1 week. How could we efficiently estimate the model checkpoint with the highest average benchmark performance without running all model checkpoints through all benchmark tasks?
 
-The key is to use Bayesian Optimization with Multi-task Gaussian Process Regression. 
+The key is to use Bayesian Optimization with Multi-task Gaussian Process Regression. Bayesian Optimization (BO for short) is a common approach for such optimization scenarios, when the function we are trying to optimize is expensive to compute. Sometimes it's called "black-box" optimization since we treat the function as a "black-box" and only have access to it by querying it's value at specific points. The basic approach is to repeatedly query (i.e. evaluate) the function so as to acquire more sample points with which to estimate a regression model, and then use that regression model to optimize the function. Naturally this process is a loop, the main steps being:
+1. use the current regression model to decide which point $ x_i $ to query next
+2. update the regression model using newly observed function value $ y_i = f(x_i) $
 
 See here for the full derivation.
 
