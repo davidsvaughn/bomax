@@ -36,8 +36,8 @@ See [here](https://davidsvaughn.github.io/bomax/) for the [full derivation](http
 
 ## Features
 
-- Uses BoTorch implementation of Multi-task Gaussian Process
-- Bayesian optimization with modified Expected Improvement acquisition function (for optimizing an average)
+- Uses [BoTorch](https://botorch.org/) implementation of [Multi-task Gaussian Process](https://botorch.readthedocs.io/en/latest/models.html#botorch.models.multitask.MultiTaskGP)
+- Bayesian optimization with [modified *Expected Improvement*](https://davidsvaughn.github.io/bomax/) acquisition function (for optimizing an average)
 - Efficient sampling strategies for multi-task settings
 - Visualization tools for monitoring optimization progress
 - Support for both CPU and GPU acceleration
@@ -54,21 +54,6 @@ cd bomax
 # Install in editable mode
 pip install -e .
 ```
-
-## Requirements
-
-BOMAX requires the following packages:
-
-- numpy
-- pandas
-- matplotlib
-- torch
-- gpytorch
-- botorch
-- scipy
-- scikit-learn
-
-These dependencies will be automatically installed when you install the package.
 
 ## Usage
 
