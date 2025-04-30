@@ -18,7 +18,7 @@ The key is to use Bayesian Optimization with Multi-task Gaussian Process Regress
 2. update the regression model using newly observed function value $ y_i = f(x_i) $
 
 <p align="center">
-  <img src="docs/baso_1280.gif" width="80%" /> 
+  <img src="docs/baso_1280.gif" width="90%" /> 
 </p>
 
 Gaussian process regression models are a popular choice for Bayesian optimization, since they provide explicit uncertainty estimates that can be used to guide step 1. The standard method is through an *acquisition function*, which basically provides a formula for turning the GP uncertainty estimates into the next query point $ x_i $. However, the most popular acquisition function, *Expected Improvement*, is not quite suitable for the current problem setting, since it would only be applicable for optimizing a single function (i.e. benchmark), as opposed to an average of mutiple functions.
@@ -26,7 +26,7 @@ Gaussian process regression models are a popular choice for Bayesian optimizatio
 The key to the current software package is a modified version of Expected Improvement for optimizing an average of many functions.
 
 <p align="center">
-  <img src="docs/baso_1280.gif" width="80%" /> 
+  <img src="docs/ei.png" width="60%" /> 
 </p>
 
 See here for the full derivation.
