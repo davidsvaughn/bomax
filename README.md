@@ -1,6 +1,6 @@
 # BOMAX: Bayesian Optimization for Maximizing Learning Curves
 
-### Using Mult--task Gaussian Process Regression to maximize *average benchmark score* across a sequence of LLM training checkpoints
+### Using Mult-task Gaussian Process Regression to maximize *average benchmark score* across a sequence of LLM training checkpoints
 
 <p align="center">
   <img src="docs/baso_1280.gif" width="90%" /> 
@@ -8,7 +8,7 @@
 
 BOMAX is a Python package for Bayesian Optimization with Multi-task Gaussian Process Regression, designed for efficient optimization of expensive-to-evaluate functions across multiple related tasks. The tool was designed with a specific problem in mind, that of choosing the optimal LLM checkpoint, but the code is application-agnostic.
 
-The problem that inspired BOMAX was optimizing LLM learning curves. A learning curve visualizes the performance of a model during training, showing how the performance changes over some time unit (steps/iterations/epochs). In classic ML, the performance is usually measured on a small validation set, sometimes called a *hold-out* set (i.e. 10-20% of the training data is *held out*). The goal is to capture the model parameters at the peak of this curve. However, if we are training/fine-tuning an LLM for multiple uses, our validation set might actually be a combination of many different benchmark tasks. After all, most LLM-leaderbaords rank LLMs by their *average benchmark score*.
+The problem that inspired BOMAX was optimizing LLM learning curves. A learning curve visualizes the performance of a model during training, showing how the performance changes over some time unit (steps/iterations/epochs). In classic ML, the performance is usually measured on a small validation set, sometimes called a *hold-out* set (i.e. 10-20% of the training data is *held out*). The goal is to capture the model parameters at the peak of this curve. However, if we are training/fine-tuning an LLM for multiple uses, our validation set might actually be a combination of many different benchmark tasks. After all, most [LLM-leaderbaords](https://huggingface.co/spaces/open-llm-leaderboard/open_llm_leaderboard#/) rank LLMs by their *average benchmark score*.
 
 <p align="center">
   <img src="docs/bench1.png" width="48%" />
