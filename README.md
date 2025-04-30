@@ -21,7 +21,7 @@ The key is to use Bayesian Optimization with Multi-task Gaussian Process Regress
 1. use the current regression model to decide which point $x_i$ to query next
 2. update the regression model using newly observed function value $y_i = f(x_i)$
 
-Gaussian process regression models are a popular choice for Bayesian optimization, since they provide explicit uncertainty estimates that can be used to guide step 1. The standard method is through an *acquisition function*, which basically provides a formula for turning the GP uncertainty estimates into the next query point $x_i$. However, the most popular acquisition function, *Expected Improvement*, is not quite suitable for the current problem setting, since it would only be applicable for optimizing a single function (i.e. benchmark), as opposed to an average of mutiple functions.
+Gaussian process regression models are a popular choice for Bayesian optimization, since they provide explicit uncertainty estimates that can be used to guide step 1. The standard method is through an *acquisition function*, which basically provides a formula for turning the GP uncertainty estimates into the next query point $x_i$. However, the most popular acquisition function, *Expected Improvement*, is not quite suitable for the current problem setting, since it would only be applicable for optimizing a single function (i.e. benchmark), as opposed to an average of multiple functions.
 
 The key to the current software package is a modified version of Expected Improvement for optimizing an average of many functions:
 
@@ -36,9 +36,8 @@ See [here](https://davidsvaughn.github.io/bomax/) for the [full derivation](http
 
 ## Features
 
-- Uses [BoTorch](https://botorch.org/) implementation of [Multi-task Gaussian Process](https://botorch.readthedocs.io/en/latest/models.html#botorch.models.multitask.MultiTaskGP)
-- Bayesian optimization with [modified *Expected Improvement*](https://davidsvaughn.github.io/bomax/) acquisition function (for optimizing an average)
-- Efficient sampling strategies for multi-task settings
+- Derivation of a [novel formulation of Expected Improvement](https://davidsvaughn.github.io/bomax/), for optimizing an average of multiple "black-box" functions
+- Uses SOTA [BoTorch](https://botorch.org/) package for GPU-accelerated Bayesian Optimization in PyTorch
 - Visualization tools for monitoring optimization progress
 - Support for both CPU and GPU acceleration
 
