@@ -36,7 +36,7 @@ See [here](https://davidsvaughn.github.io/bomax/) for the [full derivation](http
 
 ## Features
 
-- Derivation of a [novel formulation of Expected Improvement](https://davidsvaughn.github.io/bomax/), for optimizing an average of multiple "black-box" functions
+- [Novel formulation of Expected Improvement](https://davidsvaughn.github.io/bomax/) for optimizing an average of multiple "black-box" functions
 - Uses SOTA [BoTorch](https://botorch.org/) package for GPU-accelerated Bayesian Optimization in PyTorch
 - Visualization tools for monitoring optimization progress
 - Support for both CPU and GPU acceleration
