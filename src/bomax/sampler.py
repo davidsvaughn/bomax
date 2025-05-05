@@ -16,7 +16,12 @@ from scipy.stats import gaussian_kde
 from functools import partial
 
 from botorch.models import MultiTaskGP
-from gpytorch.priors import LKJCovariancePrior, SmoothedBoxPrior
+from gpytorch.priors import LKJCovariancePrior, SmoothedBoxPrior, NormalPrior
+from botorch.fit import fit_gpytorch_mll_torch
+
+# import linear_operator.settings as linop_settings
+# linop_settings._fast_log_prob._default = True
+# linop_settings._fast_solves._default = True
 
 from .utils import adict, display_fig, to_numpy, log_h, clear_cuda_tensors
 from .stopping import StoppingCondition, StoppingConditions
@@ -34,29 +39,23 @@ see: https://botorch.readthedocs.io/en/latest/models.html#botorch.models.multita
 
 """
 
-
 class MultiTaskSampler:
     def __init__(self,
                  X_feats,
-                 Y_obs,
+                 Y_obs, *,
                  Y_test=None,
-                 min_iterations=100,
-                 max_iterations=1000,
+                 max_iterations=1000, # max iterations for MLE fit
                  lr=0.1, # learning rate for MLE fit
-                 patience=5,
-                 loss_thresh=0.0001,
-                 degree_thresh=4,
-                 degree_stat='max', # 'max' or 'avg'
-                 max_sample=0.25, 
+                 lr_gamma=0.98, # learning rate decay for scheduler
+                 max_sample=0.2, # fraction of total points to sample
                  rank_fraction=0.5,
                  eta=0.25,
-                 eta_gamma=0.9,
+                 eta_gamma=0.99,
                  ei_beta=0.5,
                  ei_gamma=0.9925,
-                 log_interval=10,
                  max_retries=10,
                  verbosity=1,
-                 use_cuda=True,
+                 use_cuda=False,
                  run_dir=None,
                  ): 
         
@@ -79,12 +78,8 @@ class MultiTaskSampler:
 
         #--------------------------------------------------------------------------
         self.lr = lr
+        self.lr_gamma = lr_gamma
         self.max_iterations = max_iterations
-        self.min_iterations = min_iterations
-        self.patience = patience
-        self.loss_thresh = loss_thresh
-        self.degree_thresh = degree_thresh
-        self.degree_stat = degree_stat
         self.max_sample = max_sample
         self.rank_fraction = rank_fraction
         self.eta = eta
@@ -94,10 +89,9 @@ class MultiTaskSampler:
         self.ei_decay = 1.0
         self.max_retries = max_retries
         self.verbosity = verbosity
-        self.device = torch.device("cuda" if torch.cuda.is_available() and use_cuda else "cpu")
         self.run_dir = run_dir
-        self.log_interval = log_interval
         self.logger = logging.getLogger(__name__)
+        self.device = torch.device("cuda" if torch.cuda.is_available() and use_cuda else "cpu")
         
         if use_cuda:
             self.log(f'Using CUDA: {torch.cuda.is_available()}')
@@ -136,12 +130,15 @@ class MultiTaskSampler:
         return np.mean(self.S)
     
     # fit model and recompute posterior predictions
-    def update(self):
-        self.fit()
+    def update(self, use_large=False):
+        if use_large:
+            self._fit_large()
+        else:
+            self.fit_loop()
         return self.predict()
     
     # repeatedly attempt to fit model
-    def fit(self):
+    def fit_loop(self):
         # increment round
         self.round += 1
         
@@ -149,11 +146,12 @@ class MultiTaskSampler:
         self.next_i, self.next_j = None, None
         
         # clear CUDA tensors
-        clear_cuda_tensors(log = partial(self.log, verbosity_level=2))
+        if self.device.type == 'cuda':
+            clear_cuda_tensors(log = partial(self.log, verbosity_level=2))
         
         # run MLE fit loop
         for i in range(self.max_retries):
-            if self._fit():
+            if self.fit():
                 return True
             else:
                 if i+1 < self.max_retries:
@@ -162,7 +160,7 @@ class MultiTaskSampler:
         raise Exception('ERROR: Failed to fit model - max_retries reached')
     
     # fit model inner loop
-    def _fit(self):
+    def fit(self):
         self.num_retries += 1
         x_train = self.X_train
         y_train = self.Y_train
@@ -171,17 +169,12 @@ class MultiTaskSampler:
         # standardize y_train
         y_train, self.Y_stand = Transform.standardize(x_train, y_train)
         
-        # compute rank
-        rank = int(self.rank_fraction * m) if self.rank_fraction > 0 else None
-        
         # init retry-adjusted parameters
+        rank = int(self.rank_fraction * m) if self.rank_fraction > 0 else None
         eta = self.eta
-        patience = self.patience
-        min_iterations = self.min_iterations
-        loss_thresh = self.loss_thresh
         
         #---------------------------------------------------------------------
-        # if fit is failing... adjust parameters
+        # if fit failed previously... adjust parameters
         if self.num_retries > 0:
             
             # rank adjustment...
@@ -195,10 +188,64 @@ class MultiTaskSampler:
                 eta = eta * (self.eta_gamma ** max(0, self.num_retries - self.max_retries//2))
                 self.log(f'[ROUND-{self.round}]\tFYI: eta adjusted to {eta:.4g}', 2)
                 
-            # patience, min_iterations, loss_thresh adjustment...
-            patience = max(5, patience - self.num_retries//2)
-            min_iterations = max(50, min_iterations - 10*self.num_retries//2)
-            loss_thresh = self.loss_thresh * min(5, 1 + self.num_retries/2)
+        #---------------------------------------------------------------------
+        # Initialize multitask model
+        
+        # define task_covar_prior (IMPORTANT!!! with sparse data, nothing works without this!)
+        # see: https://archive.botorch.org/v/0.9.2/api/_modules/botorch/models/multitask.html
+        if eta is None:
+            task_covar_prior = None
+        else:
+            task_covar_prior = LKJCovariancePrior(n=m, 
+                                                  eta=torch.tensor(eta).to(self.device),
+                                                  sd_prior=SmoothedBoxPrior(math.exp(-6), math.exp(1.25), 0.05),
+                                                  ).to(self.device)
+        
+        # define multi-task model
+        self.model = MultiTaskGP(x_train, y_train, task_feature=-1, 
+                                 rank=rank,
+                                 task_covar_prior=task_covar_prior,
+                                 outcome_transform=None,
+                                 ).to(self.device)
+
+        x_train, y_train = x_train.to(self.device), y_train.to(self.device)
+        
+        # Set the model and likelihood to training mode
+        self.model.train()
+        
+        # "Loss" for GPs - the marginal log likelihood
+        mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood=self.model.likelihood, model=self.model)
+        
+        # use botorch optimization with Adam
+        fit_gpytorch_mll_torch(mll, 
+                                optimizer=partial(torch.optim.Adam, lr=self.lr),
+                                scheduler=partial(torch.optim.lr_scheduler.StepLR, step_size=10, gamma=self.lr_gamma),
+                                step_limit=self.max_iterations)
+        self.reset()
+        return True
+    #---------------------------------------------------------------------
+    
+    # experimental -- manually fit model when number of observations is large 
+    def _fit_large(self):
+        self.num_retries += 1
+        x_train = self.X_train
+        y_train = self.Y_train
+        m = self.S.shape[1]
+        
+        # standardize y_train
+        y_train, self.Y_stand = Transform.standardize(x_train, y_train)
+        
+        # compute rank
+        rank = int(self.rank_fraction * m) if self.rank_fraction > 0 else None
+        
+        # init retry-adjusted parameters
+        eta = self.eta
+        patience = 5
+        min_iterations = 100
+        loss_thresh=0.00025
+        degree_thresh=6
+        degree_stat='max'
+        log_interval=2
                 
         #---------------------------------------------------------------------
         # define task_covar_prior (IMPORTANT!!! with sparse data, nothing works without this!)
@@ -208,7 +255,8 @@ class MultiTaskSampler:
         else:
             task_covar_prior = LKJCovariancePrior(n=m, 
                                                   eta=torch.tensor(eta).to(self.device),
-                                                  sd_prior=SmoothedBoxPrior(math.exp(-6), math.exp(1.25), 0.05)).to(self.device)
+                                                  sd_prior=SmoothedBoxPrior(math.exp(-6), math.exp(1.25), 0.05),
+                                                  ).to(self.device)
             
         #---------------------------------------------------------------------
         # Initialize multitask model
@@ -234,10 +282,8 @@ class MultiTaskSampler:
         # Stopping Criteria...
         cond_list = []
         
-        #-----------------------------------
         # relative change stopping criterion
-        if self.loss_thresh is not None:
-            
+        if loss_thresh is not None:
             loss_condition = StoppingCondition(
                 value="loss",
                 condition="0 < (x[-2] - x[-1])/abs(x[-2]) < t",
@@ -252,34 +298,17 @@ class MultiTaskSampler:
             )
             cond_list.append(loss_condition)
         
-        # used only for learning rate adjustment...
-        if self.num_retries > -1:
-            plateau_condition = StoppingCondition(
-                value="loss",
-                condition="x[-1] > x[-2]",
-                alpha=5,
-                min_iterations=min_iterations,
-                lr_steps=self.max_iterations, # set high so it doesn't trigger stopping
-                patience=1,
-                lr_gamma=0.95,
-                optimizer=optimizer,
-                verbosity=self.verbosity,
-                prefix='PLATEAU',
-            )
-            cond_list.append(plateau_condition)
-        
-        #-----------------------------------
         # max-degree stopping criterion ( if there has been at least one previous failure )
-        if self.degree_thresh is not None:# and self.num_retries > self.max_retries//4:
+        if degree_thresh is not None:
         
             # function closure for degree metric
             def degree_func(**kwargs):
-                return degree_metric(model=self.model, X_inputs=self.X_inputs, m=self.m, num_trials=100)[self.degree_stat]
+                return degree_metric(model=self.model, X_inputs=self.X_inputs, m=self.m, num_trials=100)[degree_stat]
             
             degree_condition = StoppingCondition(
                 value=degree_func,
                 condition="x[-1] > t",
-                t=self.degree_thresh,
+                t=degree_thresh,
                 interval=5, # check every 5 iterations
                 min_iterations=min_iterations,
                 verbosity=self.verbosity,
@@ -316,8 +345,8 @@ class MultiTaskSampler:
             
             optimizer.step()
             
-            if i % self.log_interval == 0:
-                iter_per_sec = self.log_interval/(time.time() - start_time)
+            if i % log_interval == 0:
+                iter_per_sec = log_interval/(time.time() - start_time)
                 start_time = time.time()
                 self.log(f'[ROUND-{self.round}]\tITER-{i}/{self.max_iterations}\t{iter_per_sec:.2g} it/s\t' + '\t'.join([f'{k}: {v:.4g}' for k,v in report.items()]))  
                      
@@ -406,7 +435,10 @@ class MultiTaskSampler:
         
         return r2
     
+    # ---------------------------------------------------------------------
+    # compare current model to reference and gold standard
     def compare(self, Y_ref, Y_gold=None):
+        # get R^2 for reference
         Tr2 = self.get_r2(Y_ref)
         
         # get reference mean across tasks
@@ -418,13 +450,13 @@ class MultiTaskSampler:
         current_y_val = Y_ref_mean[self.current_best_idx]
         self.current_err = err = abs(current_y_val - y_ref_max)/y_ref_max
         
-        self.log('-'*110)
-        
-        if Y_gold is not None:
-            Gr2 = self.get_r2(Y_gold, plot=False)
-            self.log(f'[ROUND-{self.round}]\tSTATS\t{self.round}\t{self.current_best_checkpoint}\t{Tr2:.4g}\t{Gr2:.4g}\t{err:.4g}\t{self.sample_fraction:.4g}')
-        else:
-            self.log(f'[ROUND-{self.round}]\tSTATS\t{self.round}\t{self.current_best_checkpoint}\t{Tr2:.4g}\t{err:.4g}\t{self.sample_fraction:.4g}')
+        # self.log('-'*110)
+        # if Y_gold is not None:
+        #     # get R^2 for gold standard
+        #     Gr2 = self.get_r2(Y_gold, plot=False)
+        #     self.log(f'[ROUND-{self.round}]\tSTATS\t{self.round}\t{self.current_best_checkpoint}\t{Tr2:.4g}\t{Gr2:.4g}\t{err:.4g}\t{self.sample_fraction:.4g}')
+        # else:
+        #     self.log(f'[ROUND-{self.round}]\tSTATS\t{self.round}\t{self.current_best_checkpoint}\t{Tr2:.4g}\t{err:.4g}\t{self.sample_fraction:.4g}')
         
         self.log(f'[ROUND-{self.round}]\tCURRENT BEST:\tCHECKPOINT-{self.current_best_checkpoint}\tR^2={Tr2:.4f}\tY_PRED={current_y_val:.4f}\tY_ERR={100*err:.4g}%\t({100*self.sample_fraction:.2f}% sampled)')
         
@@ -473,25 +505,17 @@ class MultiTaskSampler:
         EI = np.full(len(mask), -math.inf)
 
         # Vectorized computation of all EI components
-        mu = self.y_means[valid_i, valid_j]
+        # mu = self.y_means[valid_i, valid_j]
         sig = self.y_sigmas[valid_i, valid_j]
 
         # Get row sums for each valid i
         Sx = np.sum(self.y_means[valid_i, :], axis=1)
         
-        #---------------------------------------
-        # NEW
+        # improvement vector, z-scores
         imp = Sx - S_max - beta
         z = imp/sig
 
-        #---------------------------------------
-        # #OLD  improvement vector, z-scores
-        # sx = Sx - mu
-        # s_max = S_max - sx
-        # imp = mu - s_max - beta
-        # z = imp/sig
-        #---------------------------------------
-
+        # Expected Improvement (EI) computation
         # if use_logei: # logEI computation (for stability)
         logh = log_h(torch.tensor(z, dtype=torch.float64)).numpy()
         ei_values = np.log(sig) + logh
@@ -518,7 +542,7 @@ class MultiTaskSampler:
         next_i, next_j = i_indices[k], j_indices[k]
         
         #-----------------------------------------------------------
-        # debug
+        # debugging...
         if debug:
             self.plot_task(next_j, '- NO DAMPER', EI0.reshape(self.n, self.m)[:, next_j])
         self.plot_task(next_j, '- BEFORE', EI.reshape(self.n, self.m)[:, next_j])
@@ -533,76 +557,6 @@ class MultiTaskSampler:
     
     #-------------------------------------------------------------------------
     
-    # compute expected improvement
-    def max_expected_improvement_OLD(self, beta=0.5, decay=1.0, debug=True):
-        S_mu = self.y_means.sum(axis=-1)
-        S_max_idx = np.argmax(S_mu)
-        S_max = S_mu[S_max_idx]
-        
-        # get unsampled indices
-        i_indices, j_indices = np.where(np.ones_like(self.S))
-        mask = (~self.S).reshape(-1)
-        
-        # Vectorized computation of all EI components
-        valid_i, valid_j = i_indices[mask], j_indices[mask]
-            
-        # Initialize EI matrix with -inf for invalid entries
-        EI = np.full(len(mask), -math.inf)
-
-        # Vectorized computation of all EI components
-        mu = self.y_means[valid_i, valid_j]
-        sig = self.y_sigmas[valid_i, valid_j]
-
-        # Get row sums for each valid i
-        row_sums = np.sum(self.y_means[valid_i, :], axis=1)
-        sx = row_sums - mu
-
-        # improvement vector, z-scores
-        s_max = S_max - sx
-        imp = mu - s_max - beta
-        z = imp/sig
-
-        # if use_logei: # logEI computation (for stability)
-        logh = log_h(torch.tensor(z, dtype=torch.float64)).numpy()
-        ei_values = np.log(sig) + logh
-        # else: # standard EI
-        #     ei_values = imp * norm.cdf(z) + sig * norm.pdf(z)
-        #     ei_values = np.log(ei_values)
-        
-        # if debug:
-        #     # retain original EI matrix for
-        #     # comparison to dampened EI matrix
-        #     EI0 = EI.copy()
-        #     EI0[mask] = ei_values
-            
-        # dampen highly sampled regions
-        D = self.sample_damper(decay=decay)
-        d = D[valid_i, valid_j]
-        ei_min = ei_values.min()
-        # shift (so non-negative) -> apply dampening -> unshift
-        ei_values = (ei_values-ei_min) * (1 - decay * d**0.5) + ei_min
-
-        # Assign computed values to valid sampling positions and return optimum
-        EI[mask] = ei_values
-        k = np.argmax(EI)
-        next_i, next_j = i_indices[k], j_indices[k]
-        
-        #-----------------------------------------------------------
-        # # debug
-        # if debug:
-        #     self.plot_task(next_j, '- NO DAMPER', EI0.reshape(self.n, self.m)[:, next_j])
-        # self.plot_task(next_j, '- BEFORE', EI.reshape(self.n, self.m)[:, next_j])
-        # #------------------------------------------------------------
-        
-        # # decay EI parameters
-        # self.ei_decay = self.ei_decay * self.ei_gamma
-        # self.ei_beta = self.ei_beta * self.ei_gamma
-        # self.log(f'[ROUND-{self.round}]\tFYI: EI beta: {self.ei_beta:.4g}', 2)
-        
-        return next_i, next_j
-    
-    #----------------------------------------------------------------------
-    
     # report task with most samples
     def report_most_sampled_task(self):
         task_counts = np.sum(self.S, axis=0)
@@ -613,23 +567,15 @@ class MultiTaskSampler:
     # choose next sample
     def get_next_sample_point(self):
         
-        # debugging
-        # old_i, old_j = self.max_expected_improvement_OLD(beta=self.ei_beta, decay=self.ei_decay)
-        
         # Maximize Expected Improvement acquisition function
         next_i, next_j = self.max_expected_improvement(beta=self.ei_beta, decay=self.ei_decay)
         self.next_i, self.next_j = next_i, next_j
-        
-        # compare old i,j to next i,j
-        # if old_i != next_i or old_j != next_j:
-        #     self.log(f'[ROUND-{self.round}]\tFYI: OLD: {old_i},{old_j} NEW: {next_i},{next_j}', 1)
         
         # convert to original X feature space
         next_checkpoint = self.X_feats[next_i]
         self.log(f'[ROUND-{self.round}]\tNEXT SAMPLE:\tCHECKPOINT-{next_checkpoint}\tTASK-{next_j}')
         
-        # report task with most samples
-        self.report_most_sampled_task()
+        # self.report_most_sampled_task()
         self.log('='*110)
         
         # return next sample point
