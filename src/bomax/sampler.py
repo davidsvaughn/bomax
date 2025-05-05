@@ -131,10 +131,7 @@ class MultiTaskSampler:
     
     # fit model and recompute posterior predictions
     def update(self, use_large=False):
-        if use_large:
-            self._fit_large()
-        else:
-            self.fit_loop()
+        self.fit_loop()
         return self.predict()
     
     # repeatedly attempt to fit model
