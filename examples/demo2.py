@@ -127,7 +127,7 @@ log(f'Y_values shape: {Y_values.shape}')
 Y_mean = Y_values.mean(axis=1)
 
 # Smooth each task independently
-Y_smooth = np.array([ndimage.gaussian_filter1d(col, sigma=n/10) for col in Y_values.T]).T
+Y_smooth = np.array([ndimage.gaussian_filter1d(col, sigma=n/15) for col in Y_values.T]).T
 
 # Smoothed mean over all tasks
 Y_smooth_mean = Y_smooth.mean(axis=1)
