@@ -19,10 +19,6 @@ from botorch.models import MultiTaskGP
 from gpytorch.priors import LKJCovariancePrior, SmoothedBoxPrior, NormalPrior
 from botorch.fit import fit_gpytorch_mll_torch
 
-# import linear_operator.settings as linop_settings
-# linop_settings._fast_log_prob._default = True
-# linop_settings._fast_solves._default = True
-
 from .utils import adict, display_fig, to_numpy, log_h, clear_cuda_tensors
 from .stopping import StoppingCondition, StoppingConditions
 from .normalize import Transform
@@ -47,7 +43,6 @@ class MultiTaskSampler:
                  max_iterations=1000, # max iterations for MLE fit
                  lr=0.1, # learning rate for MLE fit
                  lr_gamma=0.98, # learning rate decay for scheduler
-                 max_sample=0.2, # fraction of total points to sample
                  rank_fraction=0.5,
                  eta=0.25,
                  eta_gamma=0.99,
@@ -80,7 +75,6 @@ class MultiTaskSampler:
         self.lr = lr
         self.lr_gamma = lr_gamma
         self.max_iterations = max_iterations
-        self.max_sample = max_sample
         self.rank_fraction = rank_fraction
         self.eta = eta
         self.eta_gamma = eta_gamma
@@ -436,7 +430,7 @@ class MultiTaskSampler:
     # compare current model to reference and gold standard
     def compare(self, Y_ref, Y_gold=None):
         # get R^2 for reference
-        Tr2 = self.get_r2(Y_ref)
+        # Tr2 = self.get_r2(Y_ref)
         
         # get reference mean across tasks
         Y_ref_mean = Y_ref.mean(axis=1)
@@ -455,7 +449,8 @@ class MultiTaskSampler:
         # else:
         #     self.log(f'[ROUND-{self.round}]\tSTATS\t{self.round}\t{self.current_best_checkpoint}\t{Tr2:.4g}\t{err:.4g}\t{self.sample_fraction:.4g}')
         
-        self.log(f'[ROUND-{self.round}]\tCURRENT BEST:\tCHECKPOINT-{self.current_best_checkpoint}\tR^2={Tr2:.4f}\tY_PRED={current_y_val:.4f}\tY_ERR={100*err:.4g}%\t({100*self.sample_fraction:.2f}% sampled)')
+        # self.log(f'[ROUND-{self.round}]\tCURRENT BEST:\tCHECKPOINT-{self.current_best_checkpoint}\tR^2={Tr2:.4f}\tY_PRED={current_y_val:.4f}\tY_ERR={100*err:.4g}%\t({100*self.sample_fraction:.2f}% sampled)')
+        self.log(f'[ROUND-{self.round}]\tCURRENT BEST:\tCHECKPOINT-{self.current_best_checkpoint}\tY_PRED={current_y_val:.4f}\tY_ERR={100*err:.4g}%\t({100*self.sample_fraction:.2f}% sampled)')
         
     #-------------------------------------------------------------------------
     
@@ -486,7 +481,7 @@ class MultiTaskSampler:
         return K
     
     # compute expected improvement
-    def max_expected_improvement(self, beta=0.5, decay=1.0, debug=True):
+    def max_expected_improvement(self, beta=0.5, decay=1.0, debug=False):
         S_mu = self.y_means.sum(axis=-1)
         S_max_idx = np.argmax(S_mu)
         S_max = S_mu[S_max_idx]
@@ -623,7 +618,7 @@ class MultiTaskSampler:
     def display(self, fig=None, fn=None, prefix='fig'):
         display_fig(self.run_dir, fig=fig, fn=fn, prefix=prefix)
     
-    def plot_posterior_mean(self, y_ref=None, y_gold=None, ref_color='g', gold_color='r', prefix='posterior_mean'):
+    def plot_posterior_mean(self, y_ref=None, y_gold=None, ref_color='darkviolet', gold_color='violet', prefix='posterior_mean'):
         legend = []
         plt.figure(figsize=(15, 10))
         plt.plot(self.X_feats, self.y_mean, 'b')
@@ -643,7 +638,7 @@ class MultiTaskSampler:
             i = np.argmax(y_ref)
             ref_best_input = self.X_feats[i]
             plt.plot(self.X_feats, y_ref, ref_color)
-            legend.append('Target Mean')
+            legend.append('Target (smoothed) Mean')
             
             # draw vertical dotted line at best input
             plt.axvline(ref_best_input, color=ref_color, linestyle='--')
@@ -654,7 +649,7 @@ class MultiTaskSampler:
             i = np.argmax(y_gold)
             gold_best_input = self.X_feats[i]
             plt.plot(self.X_feats, y_gold, gold_color)
-            legend.append('True Mean')
+            legend.append('Raw (noisy) Mean')
             
         plt.legend(legend, loc='best')
         
@@ -666,7 +661,12 @@ class MultiTaskSampler:
             plt.ylim(y_min, y_max)
             plt.fill_betweenx([y_min, y_max], self.current_best_checkpoint, ref_best_input, color='red', alpha=0.1)
         
-        plt.title(f'Round: {self.round-1} - Estimated Max: {self.current_best_checkpoint}')
+        plt.title(f'Round: {self.round-1} | Current Best Checkpoint: {self.current_best_checkpoint}')
+        
+        # add x-axis and y-axis labels
+        plt.xlabel('checkpoint')
+        plt.ylabel('performance')
+        
         self.display(prefix=prefix)
         
     def plot_task(self, j, msg='', fvals=None, prefix='task'):

@@ -7,8 +7,7 @@ import torch
 import logging
 from datetime import datetime
 from glob import glob
-import itertools
-import traceback
+from scipy import ndimage
 
 # Import from the bomax package
 from bomax.initialize import init_samples
@@ -52,9 +51,6 @@ fn = 'perf1.txt'
 # if <1, then fraction of total obs
 n_obs    = 2
 # n_obs    = 0.1
-
-# stop iterating after this fraction of all points have been sampled
-max_sample = 0.1
 
 #-------------------------------------------------------------------------
 # random seed
@@ -116,66 +112,72 @@ log(f'Random seed: {rand_seed}')
 X_steps, Y_values = load_example_dataset(fn)
 
 # synthetic dataset
-X_steps, Y_values =  generate_learning_curves(50, 25)
+# X_steps, Y_values =  generate_learning_curves(50, 25)
 
+# n == number of steps/checkpoints
+# m == number of tasks
 n, m = Y_values.shape
-log(f'X_steps: {X_steps}')
+# log(f'X_steps: {X_steps}')
 log(f'Y_values shape: {Y_values.shape}')
 
 #--------------------------------------------------------------------------
-# gold standard
-Y_ref = None
-Y_ref = Y_values.copy()
+# Compute Gold Standard Variants
 
-Y_ref_mean = Y_ref.mean(axis=1)
-Y_test_mean = Y_values.mean(axis=1)
+# Raw (noisy) mean over all tasks (full dataset) 
+Y_mean = Y_values.mean(axis=1)
+
+# Smooth each task independently
+Y_smooth = np.array([ndimage.gaussian_filter1d(col, sigma=n/20) for col in Y_values.T]).T
+
+# Smoothed mean over all tasks
+Y_smooth_mean = Y_smooth.mean(axis=1)
 
 #--------------------------------------------------------------------------
-# find best checkpoint
+# Find Optimal Checkpoint (using gold standard data)
 
-best_idx = np.argmax(Y_values.mean(axis=1))
-best_y_mean = Y_values.mean(axis=1)[best_idx]
-best_checkpoint = X_steps[best_idx]
+# raw data
+i = np.argmax(Y_values.mean(axis=1))
+raw_x_max, raw_y_max = X_steps[i], Y_values.mean(axis=1)[i]
 
-i = np.argmax(Y_ref_mean)
-regression_best_checkpoint = X_steps[i]
-regression_y_max = Y_ref_mean[i]
+# smoothed data
+i = np.argmax(Y_smooth_mean)
+smooth_x_max, smooth_y_max = X_steps[i], Y_smooth_mean[i]
 
-log(f'TRU BEST CHECKPOINT:\t{best_checkpoint}\tY={best_y_mean:.4f}')
-log(f'REF BEST CHECKPOINT:\t{regression_best_checkpoint}\tY={regression_y_max:.4f}')
+log(f'BEST CHECKPOINT - RAW:\t{raw_x_max}\tY={raw_y_max:.4f}')
+log(f'BEST CHECKPOINT - SMOOTHED:\t{smooth_x_max}\tY={smooth_y_max:.4f}')
 
+#--------------------------------------------------------------------------
+# Training Steps
 
-#---------------------------------------------------------
-# Subsample data
-S = init_samples(n, m, min_obs=2, log=log)
-Y_obs = np.full(S.shape, np.nan)
+# Get boolean mask S for initial sample points...
+# **NOTE** : We need 2 samples-per-task to avoid numerical instability
+S = init_samples(n, m, log=log)
 
-# Y_obs[S] = Y_values[S]
-for i, j in itertools.product(range(n), range(m)):
-        if S[i, j]:
-            Y_obs[i, j] = Y_values[i, j]
-    
-# Initialize the sampler
-sampler = MultiTaskSampler(X_steps, Y_obs,
-                        #    Y_test=Y_values,
-                            max_sample=max_sample, 
-                            run_dir=run_dir,
-                            eta=0.25,
-                            # log_interval=5,
-                            )
+# Get initial samples according to boolean mask S
+Y_obs = np.where(S, Y_values, np.nan)
+
+# Define sampler and seed with initial samples            
+sampler = MultiTaskSampler(X_steps, Y_obs, 
+                           eta=0.25,
+                           run_dir=run_dir)
 
 # Fit model to initial samples
 sampler.update()
-sampler.compare(Y_ref, Y_values)
-# sampler.compare(Y_test)
+
+# Compare with Gold Standard data (only possible in test runs)
+sampler.compare(Y_smooth, Y_values)
 
 # Run Bayesian optimization loop
-while sampler.sample_fraction < max_sample:
+while sampler.sample_fraction < 0.15:
+    
+    # determine next sample coordinates and query black-box function - takes optional callback function: f(i,j)
     _, next_task = sampler.add_next_sample(lambda i,j: Y_values[i,j])
+    
+    # update the GP model with the new sample
     sampler.update()
-    sampler.compare(Y_ref, Y_values)
-    # sampler.compare(Y_test)
-    sampler.plot_task(next_task, '- AFTER')
-    # sampler.plot_posterior_mean(y_gold=Y_test_mean)
-    sampler.plot_posterior_mean(Y_ref_mean, Y_test_mean)
+    
+    # Compare with Gold Standard data, and plot results
+    sampler.compare(Y_smooth, Y_values)
+    # sampler.plot_task(next_task, '- AFTER')
+    sampler.plot_posterior_mean(Y_smooth_mean, Y_mean)
 

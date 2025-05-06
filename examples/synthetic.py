@@ -23,7 +23,9 @@ def generate_learning_curves(n_steps=50,
                              avg_cluster_size=3,
                              cluster_size_var=1.0,
                              noise_level=0.075,
-                             noise_smoothing=4.0,
+                             noise_smoothing=1.0,
+                             jitter=0.05,
+                             return_clusters=False,
                              seed=None):
     """
     Synthetic, correlated learning curves.
@@ -83,25 +85,32 @@ def generate_learning_curves(n_steps=50,
         for _ in range(n_curves_in_cluster):
             noise = rng.normal(0.0, noise_level, size=n_steps)
             noise = gaussian_filter1d(noise, noise_smoothing)
-            curves.append(prototype + noise)
+            # add uniform jitter to each point
+            noise += rng.uniform(-jitter, jitter, size=n_steps)
+            curve = prototype + noise
+            curve -= max(0, curve.max() - 1)
+            curves.append(curve)
             group_id.append(g)
 
     curves = np.vstack(curves)
     x_steps = np.arange(curves.shape[1])
-    return x_steps, curves.T #, np.asarray(group_id)
+    if return_clusters:
+        return x_steps, curves.T, np.asarray(group_id)
+    else:
+        return x_steps, curves.T
 
 
 # ---------------------------------------------------------------------
 # Quick demonstration – generate and plot synthetic curves
 # ---------------------------------------------------------------------
 if __name__ == "__main__":
-    t, curves, ids = generate_learning_curves()
+    t, curves, ids = generate_learning_curves(return_clusters=True, noise_smoothing=1, noise_level=0.1)
 
     for g in np.unique(ids):
         mask = ids == g
-        plt.plot(t, curves[mask].T)        # one colour per group
+        plt.plot(t, curves.T[mask].T)        # one colour per group
 
-    plt.plot(t, curves.mean(axis=0), "--", linewidth=2.5, color="red")
+    plt.plot(t, curves.T.mean(axis=0), "--", linewidth=2.5, color="red")
     plt.xlabel("training step")
     plt.ylabel("validation metric")
     plt.title("Synthetic correlated learning curves")
