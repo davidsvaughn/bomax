@@ -127,7 +127,7 @@ log(f'Y_values shape: {Y_values.shape}')
 Y_mean = Y_values.mean(axis=1)
 
 # Smooth each task independently
-Y_smooth = np.array([ndimage.gaussian_filter1d(col, sigma=n/15) for col in Y_values.T]).T
+Y_smooth = np.array([ndimage.gaussian_filter1d(col, sigma=n/10) for col in Y_values.T]).T
 
 # Smoothed mean over all tasks
 Y_smooth_mean = Y_smooth.mean(axis=1)
@@ -144,7 +144,7 @@ i = np.argmax(Y_smooth_mean)
 smooth_x_max, smooth_y_max = X_steps[i], Y_smooth_mean[i]
 
 log(f'BEST CHECKPOINT:')
-log(f'\tRAW:   \t{raw_x_max}\tY={raw_y_max:.4f}')
+log(f'\tRAW:     \t{raw_x_max}\tY={raw_y_max:.4f}')
 log(f'\tSMOOTHED:\t{smooth_x_max}\tY={smooth_y_max:.4f}')
 
 #--------------------------------------------------------------------------
@@ -160,7 +160,7 @@ Y_obs = np.where(S, Y_values, np.nan)
 # Define sampler and seed with initial samples            
 sampler = MultiTaskSampler(X_steps, Y_obs, 
                            eta=0.25,
-                           use_cuda=True,
+                        #    use_cuda=True,
                            run_dir=run_dir)
 
 # Fit model to initial samples

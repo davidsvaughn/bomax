@@ -86,11 +86,6 @@ class MultiTaskSampler:
         self.run_dir = run_dir
         self.logger = logging.getLogger(__name__)
         self.device = torch.device("cuda" if torch.cuda.is_available() and use_cuda else "cpu")
-        
-        if use_cuda:
-            self.log(f'Using CUDA: {torch.cuda.is_available()}')
-        else:
-            self.log('Using CPU')
         self.log(f'Using device: {self.device}')
     
         self.X_inputs = self.X_inputs.to(self.device)
