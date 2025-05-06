@@ -7,75 +7,56 @@ import torch
 import logging
 from datetime import datetime
 from glob import glob
-import traceback
+from scipy import ndimage
 
 # Import from the bomax package
 from bomax.initialize import init_samples
 from bomax.sampler import MultiTaskSampler
 
+from synthetic import generate_learning_curves
+
 torch.set_default_dtype(torch.float64)
+plt.ioff()
 rand_seed = -1
-rank_fraction = -1
+
+# detect if running on local machine
+local = os.path.exists('/home/david')
+
+#--------------------------------------------------------------------------
+
+def load_example_dataset(file_name):
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    parent_dir = os.path.dirname(current_dir)
+    data_dir = os.path.join(parent_dir, 'data')
+    
+    # load data
+    df = pd.read_csv(os.path.join(data_dir, file_name), delimiter='\t')
+
+    # Extract checkpoint numbers
+    X_steps = df['CHECKPOINT'].apply(lambda x: int(x.split('-')[1])).values
+    
+    # Identify test columns (excluding average)
+    task_cols = [col for col in df.columns if col.startswith('TASK_')]
+    Y_values = df[task_cols].values
+    # n,m = Y_values.shape
+    
+    return X_steps, Y_values
+
 
 #--------------------------------------------------------------------------
 # SET PARAMETERS
 
-fn = 'perf1.txt'
-# fn = 'perf2.txt'
+data_file = 'dataset1.txt'
+# data_file = 'dataset2.txt'
 
-# rand_seed = 2951
-
-# number of random obs-per-task (opt) to initially sample
-# if <1, then fraction of total obs
-n_obs    = 2
-# n_obs    = 0.1
-
-# stop BO after this fraction of all points are sampled
-# if <1, then fraction of total obs
-# if >1, then number of obs
-max_sample = 600
-
-# select random subset of tasks
-task_sample = 1.0
-# task_sample = 0.35
-
-# multi-task lkj prior
-eta = 0.25
-eta_gamma = 0.99
-rank_fraction = 0.5 # 0.25  0.5
-
-# Expected Improvement parameters...
-ei_beta = 0.5
-# deta decay: ei_beta will be ei_f of its start value (i.e. 0.1) when ei_t of all points have been sampled
-ei_f, ei_t = 0.2, 0.05
-# ei_gamma = 0.9925
-
-# misc
-log_interval = 25
-verbosity = 1
-use_cuda = True
-
-# synthetic data...
-# synthetic = False
-# n_rows, n_cols = 100, 100
-
-#-------------------------------------------------------------------------
 # random seed
 rand_seed = np.random.randint(1000, 10000) if rand_seed <= 0 else rand_seed
 np.random.seed(rand_seed)
 random.seed(rand_seed)
 
-# detect if running on local machine
-local = os.path.exists('/home/david')
-
-# if not local:
-plt.ioff()
-
 #--------------------------------------------------------------------------
-# Load the Data...
+# setup run directory
 
-# We'll assume you have a CSV with columns:
-# "CHECKPOINT", "TASK_1", "TASK_2", ....
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 data_dir = os.path.join(parent_dir, 'data')
@@ -84,7 +65,6 @@ run_base = os.path.join(current_dir, 'runs') if local else '/mnt/llm-train/baso/
 # Create runs directory if it doesn't exist
 os.makedirs(run_base, exist_ok=True)
 
-#--------------------------------------------------------------------------
 # remove all empty run directories
 for d in glob(os.path.join(run_base, f'run_*')):
     if len(os.listdir(d)) == 0:
@@ -96,11 +76,6 @@ j = len(glob(os.path.join(run_base, f'{run_id}*')))
 run_dir = os.path.join(run_base, f'{run_id}_{j}' if j>0 else run_id)
 while os.path.exists(run_dir): run_dir += 'a'
 os.makedirs(run_dir, exist_ok=False)
-
-# copy current file to run directory (save parameters, etc)
-src = os.path.join(current_dir, os.path.basename(__file__))
-dst = os.path.join(run_dir, os.path.basename(__file__))
-os.system(f'cp {src} {dst}')
 
 #-----------------------------------------------------------------------
 # setup logging
@@ -114,128 +89,86 @@ logging.basicConfig(
         logging.StreamHandler()  # This will print to console too
     ]
 )
-def log(msg, verbosity_level=1):
-    if verbosity >= verbosity_level:
-        logging.getLogger(__name__).info(msg)
+def log(msg):
+    logging.getLogger(__name__).info(msg)
     
 log('-'*110)
 log(f'Run directory: {run_dir}')
 log(f'Random seed: {rand_seed}')
 
 #--------------------------------------------------------------------------
-# load data
-df = pd.read_csv(os.path.join(data_dir, fn), delimiter='\t')
+# example dataset
+X_steps, Y_values = load_example_dataset(data_file)
 
-# Extract checkpoint numbers
-X_feats = df['CHECKPOINT'].apply(lambda x: int(x.split('-')[1])).values
- 
-# Identify test columns (excluding average)
-task_cols = [col for col in df.columns if col.startswith('TASK_')]
-Y_test = df[task_cols].values
-del task_cols
-n,m = Y_test.shape
+# synthetic dataset
+X_steps, Y_values =  generate_learning_curves(50, 25)
 
-# sample subset of tasks (possibly)
-if task_sample>0 and task_sample!=1:
-    if task_sample < 1:
-        task_sample = int(task_sample * m)
-    idx = np.random.choice(range(m), task_sample, replace=False)
-    Y_test = Y_test[:, idx]
-    n,m = Y_test.shape
-    
-if max_sample > 1:
-    max_sample = max_sample / (n*m)
-    
-# compute ei_gamma
-ei_gamma = np.exp(np.log(ei_f) / (ei_t*n*m - 2*m))
-log(f'FYI: ei_gamma: {ei_gamma:.4g}')
+n, m = Y_values.shape
+log(f'Y_values.shape={Y_values.shape} (n={n} checkpoints, m={m} tasks)')
 
 #--------------------------------------------------------------------------
-# Train regression model on all data for gold standard
-Y_ref = None
-Y_ref = Y_test.copy()
+# Compute Gold Standard Variants
 
-if Y_ref is None:
-    sampler = MultiTaskSampler(X_feats, Y_test, 
-                               Y_test=Y_test,
-                               eta=None,
-                               degree_thresh=6,
-                               min_iterations=100,
-                               max_iterations=2000,
-                               loss_thresh=0.00025,
-                               log_interval=25,
-                               use_cuda=use_cuda,
-                               run_dir=run_dir,
-                               )
-    # Fit model to full dataset
-    _, _, Y_ref, _ = sampler.update()
+# Raw (noisy) mean over all tasks (full dataset) 
+Y_mean = Y_values.mean(axis=1)
+
+# Smooth each task independently
+Y_smooth = np.array([ndimage.gaussian_filter1d(col, sigma=n/15) for col in Y_values.T]).T
+
+# Smoothed mean over all tasks
+Y_smooth_mean = Y_smooth.mean(axis=1)
+
+#--------------------------------------------------------------------------
+# Find Optimal Checkpoint (using gold standard data)
+
+# raw data
+i = np.argmax(Y_values.mean(axis=1))
+raw_x_max, raw_y_max = X_steps[i], Y_values.mean(axis=1)[i]
+
+# smoothed data
+i = np.argmax(Y_smooth_mean)
+smooth_x_max, smooth_y_max = X_steps[i], Y_smooth_mean[i]
+
+log(f'BEST CHECKPOINT:')
+log(f'\tRAW:     \t{raw_x_max}\tY={raw_y_max:.4f}')
+log(f'\tSMOOTHED:\t{smooth_x_max}\tY={smooth_y_max:.4f}')
+
+#--------------------------------------------------------------------------
+# Initialize the Sampler
+
+# Get boolean mask S for initial sample points...
+# **NOTE** : We need 2 samples-per-task to avoid numerical instability
+S = init_samples(n, m, log=log)
+
+# Get initial samples according to boolean mask S
+Y_obs = np.where(S, Y_values, np.nan)
+
+# Define sampler and seed with initial samples            
+sampler = MultiTaskSampler(X_steps, Y_obs, 
+                           eta=0.25,
+                        #    use_cuda=True,
+                           run_dir=run_dir)
+
+# Fit model to initial samples
+sampler.update()
+
+# Compare with Gold Standard data (only possible in test runs)
+sampler.compare(Y_smooth, Y_values)
+
+#---------------------------------------------------------------------------
+# Main BO Loop
+
+# Run Bayesian optimization loop
+while sampler.sample_fraction < 0.1:
     
-    sampler.compare(Y_test)
-
-Y_ref_mean = Y_ref.mean(axis=1)
-Y_test_mean = Y_test.mean(axis=1)
-
-#--------------------------------------------------------------------------
-# find best checkpoint
-
-best_idx = np.argmax(Y_test.mean(axis=1))
-best_y_mean = Y_test.mean(axis=1)[best_idx]
-best_checkpoint = X_feats[best_idx]
-
-i = np.argmax(Y_ref_mean)
-regression_best_checkpoint = X_feats[i]
-regression_y_max = Y_ref_mean[i]
-
-log(f'TRU BEST CHECKPOINT:\t{best_checkpoint}\tY={best_y_mean:.4f}')
-log(f'REF BEST CHECKPOINT:\t{regression_best_checkpoint}\tY={regression_y_max:.4f}')
-
-#--------------------------------------------------------------------------
-# run the sampler
-
-for _ in range(10): # try 10 times to complete the run without error
+    # determine next sample coordinates and query black-box function - takes optional callback function: f(i,j)
+    _, next_task = sampler.add_next_sample(lambda i,j: Y_values[i,j])
     
-    try:
-        # Subsample data
-        S = init_samples(n, m, n_obs, log=log)
-        Y_obs = np.full(S.shape, np.nan)
-        Y_obs[S] = Y_test[S]
-            
-        # Initialize the sampler
-        sampler = MultiTaskSampler(X_feats, Y_obs,
-                                   Y_test=Y_test,
-                                   eta=eta,
-                                   eta_gamma=eta_gamma,
-                                   ei_beta=ei_beta,
-                                   ei_gamma=ei_gamma,
-                                   max_sample=max_sample, 
-                                   rank_fraction=rank_fraction,
-                                   log_interval=log_interval,
-                                   use_cuda=use_cuda,
-                                   run_dir=run_dir,
-                                   max_retries=20,
-                                   )
+    # update the GP model with the new sample
+    sampler.update()
+    
+    # Compare with Gold Standard data, and plot results
+    sampler.compare(Y_smooth, Y_values)
+    # sampler.plot_task(next_task, '- AFTER')
+    sampler.plot_posterior_mean(Y_smooth_mean, Y_mean)
 
-        # Fit model to initial samples
-        sampler.update()
-        sampler.compare(Y_ref, Y_test)
-        # sampler.compare(Y_test)
-        # sampler.plot_all(max_fig=10)
-
-        # Run Bayesian optimization loop
-        while sampler.sample_fraction < max_sample:
-            _, next_task = sampler.add_next_sample()
-            sampler.update()
-            sampler.compare(Y_ref, Y_test)
-            # sampler.compare(Y_test)
-            sampler.plot_task(next_task, '- AFTER')
-            # sampler.plot_posterior_mean(y_gold=Y_test_mean)
-            sampler.plot_posterior_mean(Y_ref_mean, Y_test_mean)
-            
-        break
-        
-    except Exception as e:
-        logging.error(f'ERROR: {e}')
-        logging.error(traceback.format_exc())
-        pass
-
-#--------------------------------------------------------------------------

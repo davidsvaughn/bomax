@@ -16,13 +16,11 @@ from scipy.stats import gaussian_kde
 from functools import partial
 
 from botorch.models import MultiTaskGP
-from gpytorch.priors import LKJCovariancePrior, SmoothedBoxPrior, NormalPrior
+from gpytorch.priors import LKJCovariancePrior, SmoothedBoxPrior
 from botorch.fit import fit_gpytorch_mll_torch
 
 from .utils import adict, display_fig, to_numpy, log_h, clear_cuda_tensors
-from .stopping import StoppingCondition, StoppingConditions
 from .normalize import Transform
-from .degree import degree_metric
 
 torch.set_default_dtype(torch.float64)
 
@@ -209,142 +207,7 @@ class MultiTaskSampler:
                                 step_limit=self.max_iterations)
         self.reset()
         return True
-    #---------------------------------------------------------------------
     
-    # experimental -- manually fit model when number of observations is large 
-    def _fit_large(self):
-        self.num_retries += 1
-        x_train = self.X_train
-        y_train = self.Y_train
-        m = self.S.shape[1]
-        
-        # standardize y_train
-        y_train, self.Y_stand = Transform.standardize(x_train, y_train)
-        
-        # compute rank
-        rank = int(self.rank_fraction * m) if self.rank_fraction > 0 else None
-        
-        # init retry-adjusted parameters
-        eta = self.eta
-        patience = 5
-        min_iterations = 100
-        loss_thresh=0.00025
-        degree_thresh=6
-        degree_stat='max'
-        log_interval=2
-                
-        #---------------------------------------------------------------------
-        # define task_covar_prior (IMPORTANT!!! with sparse data, nothing works without this!)
-        # see: https://archive.botorch.org/v/0.9.2/api/_modules/botorch/models/multitask.html
-        if eta is None:
-            task_covar_prior = None
-        else:
-            task_covar_prior = LKJCovariancePrior(n=m, 
-                                                  eta=torch.tensor(eta).to(self.device),
-                                                  sd_prior=SmoothedBoxPrior(math.exp(-6), math.exp(1.25), 0.05),
-                                                  ).to(self.device)
-            
-        #---------------------------------------------------------------------
-        # Initialize multitask model
-        
-        self.model = MultiTaskGP(x_train, y_train, task_feature=-1, 
-                                 rank=rank,
-                                 task_covar_prior=task_covar_prior,
-                                 outcome_transform=None,
-                                 ).to(self.device)
-
-        x_train, y_train = x_train.to(self.device), y_train.to(self.device)
-        
-        # Set the model and likelihood to training mode
-        self.model.train()
-        
-        # "Loss" for GPs - the marginal log likelihood
-        mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood=self.model.likelihood, model=self.model)
-        
-        # Use the adam optimizer
-        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
-        
-        #---------------------------------------------------------
-        # Stopping Criteria...
-        cond_list = []
-        
-        # relative change stopping criterion
-        if loss_thresh is not None:
-            loss_condition = StoppingCondition(
-                value="loss",
-                condition="0 < (x[-2] - x[-1])/abs(x[-2]) < t",
-                t=loss_thresh,
-                alpha=5,
-                min_iterations=min_iterations,
-                patience=patience,
-                lr_steps=5, # learning rate lowered 5 times before termination
-                lr_gamma=0.8,
-                optimizer=optimizer,
-                verbosity=self.verbosity,
-            )
-            cond_list.append(loss_condition)
-        
-        # max-degree stopping criterion ( if there has been at least one previous failure )
-        if degree_thresh is not None:
-        
-            # function closure for degree metric
-            def degree_func(**kwargs):
-                return degree_metric(model=self.model, X_inputs=self.X_inputs, m=self.m, num_trials=100)[degree_stat]
-            
-            degree_condition = StoppingCondition(
-                value=degree_func,
-                condition="x[-1] > t",
-                t=degree_thresh,
-                interval=5, # check every 5 iterations
-                min_iterations=min_iterations,
-                verbosity=self.verbosity,
-            )
-            cond_list.append(degree_condition)
-        
-        #------------------------------------
-        # combine stopping conditions (at least one must be satisfied)
-        stop_conditions = StoppingConditions(cond_list, mode='any') # mode = 'any' or 'all'
-        
-        #---------------------------------------------------------
-        
-        report = {}
-        start_time = time.time()
-        
-        # train loop
-        for i in range(self.max_iterations):
-            optimizer.zero_grad()
-            output = self.model(x_train)
-            
-            try:
-                loss = -mll(output, self.model.train_targets)
-            except Exception as e:
-                if self.num_retries+1 == self.max_retries:
-                    self.logger.exception("An exception occurred")
-                else:
-                    self.logger.error(f'Error in loss calculation at iteration {i}:\n{e}')
-                return False
-            
-            loss.backward()
-            
-            if stop_conditions.check(loss=loss.item(), report=report):
-                break
-            
-            optimizer.step()
-            
-            if i % log_interval == 0:
-                iter_per_sec = log_interval/(time.time() - start_time)
-                start_time = time.time()
-                self.log(f'[ROUND-{self.round}]\tITER-{i}/{self.max_iterations}\t{iter_per_sec:.2g} it/s\t' + '\t'.join([f'{k}: {v:.4g}' for k,v in report.items()]))  
-                     
-        #---- end train loop --------------------------------------------------
-        
-        if stop_conditions.last:
-            # fit has succeeded
-            self.reset()
-            return True
-        
-        # max iterations reached without convergence
-        return False
     #--------------------------------------------------------------------------
             
     def predict(self, x=None):
@@ -424,8 +287,6 @@ class MultiTaskSampler:
     # ---------------------------------------------------------------------
     # compare current model to reference and gold standard
     def compare(self, Y_ref, Y_gold=None):
-        # get R^2 for reference
-        # Tr2 = self.get_r2(Y_ref)
         
         # get reference mean across tasks
         Y_ref_mean = Y_ref.mean(axis=1)
