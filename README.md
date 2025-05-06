@@ -47,10 +47,11 @@ You can install BOMAX in development mode:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/bomax.git
+git clone https://github.com/davidsvaughn/bomax.git
 cd bomax
 
-# Install in editable mode
+# Install inside virtual environment (in editable mode)
+virtualenv -p python3.10 venv && source venv/bin/activate
 pip install -e .
 ```
 
