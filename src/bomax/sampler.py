@@ -131,7 +131,7 @@ class MultiTaskSampler:
         # Get initial observations according to boolean mask S
         Y_obs = np.full(S.shape, np.nan)
         for i, j in  zip(*sample_idx):
-            self.log(f'Computing initial sample: [{self.X_feats[i]},{j}]')
+            # self.log(f'Computing initial sample: [{self.X_feats[i]},{j}]')
             Y_obs[i, j] = self.func(i, j)
         
         # store observed data
