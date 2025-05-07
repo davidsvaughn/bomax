@@ -1,7 +1,7 @@
 # BOMAX: Bayesian Optimization for Maximizing LLM Learning Curves
 
 <p align="center">
-  <img src="media/baso_1280.gif" width="90%" /> 
+  <img src="docs/baso_1280.gif" width="90%" /> 
 </p>
 
 ### Using Mult-task Gaussian Process Regression to maximize *average benchmark score* across a sequence of LLM training checkpoints
@@ -11,8 +11,8 @@ BOMAX is a Python package for *Bayesian Optimization with Multi-task Gaussian Pr
 The problem that inspired BOMAX was optimizing LLM learning curves. A learning curve visualizes the performance of a model during training, showing how the performance changes over some time unit (steps/iterations/epochs). In classic ML, the performance is usually measured on a small validation set, sometimes called a *hold-out* set (i.e. 10-20% of the training data is *held out*). The goal is to capture the model parameters at the peak of this curve. However, if we are training/fine-tuning an LLM for multiple uses, our validation set might actually be a combination of many different benchmark tasks. After all, most [LLM-leaderbaords](https://huggingface.co/spaces/open-llm-leaderboard/open_llm_leaderboard#/) rank LLMs by their *average benchmark score*.
 
 <p align="center">
-  <img src="media/bench1.png" width="48%" />
-  <img src="media/bench2.png" width="48%" /> 
+  <img src="docs/bench1.png" width="48%" />
+  <img src="docs/bench2.png" width="48%" /> 
 </p>
 
 Let's say we have a set of model 100 model checkpoints that were saved at regular intervals during training/fine-tuning. Suppose that running a single model on a single benchmark takes 1 minute, and we have 100 benchmark tasks. Running all models on all tasks would take 10000 minutes = 1 week. How could we efficiently estimate the model checkpoint with the highest average benchmark performance without running all model checkpoints through all benchmark tasks?
@@ -27,7 +27,7 @@ The key to the current software package is a novel formulation of Expected Impro
 
 <p align="center">
   <a href="https://davidsvaughn.github.io/bomax/">
-    <img src="media/ei.png" width="60%" /> 
+    <img src="docs/ei.png" width="60%" /> 
   </a>
 </p>
 
