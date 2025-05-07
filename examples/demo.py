@@ -161,7 +161,7 @@ sampler.compare(Y_smooth, Y_values)
 # Main BO Loop
 
 # Run Bayesian optimization loop
-while sampler.sample_fraction < 0.1:
+while sampler.sample_fraction < 0.05:
     
     # determine next sample coordinates and query black-box function - takes optional callback function: f(i,j)
     _, next_task = sampler.add_next_sample(lambda i,j: Y_values[i,j])
