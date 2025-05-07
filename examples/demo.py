@@ -17,10 +17,12 @@ from synthetic import generate_learning_curves
 
 torch.set_default_dtype(torch.float64)
 plt.ioff()
-rand_seed = -1
 
 # detect if running on local machine
 local = os.path.exists('/home/david')
+
+rand_seed = -1
+rand_seed = 8227
 
 #--------------------------------------------------------------------------
 
@@ -101,7 +103,7 @@ log(f'Random seed: {rand_seed}')
 X_steps, Y_values = load_example_dataset(data_file)
 
 # synthetic dataset
-X_steps, Y_values =  generate_learning_curves(50, 25)
+# X_steps, Y_values =  generate_learning_curves(50, 25)
 
 n, m = Y_values.shape
 log(f'Y_values.shape={Y_values.shape} (n={n} checkpoints, m={m} tasks)')
