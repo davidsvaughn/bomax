@@ -14,6 +14,7 @@ import math
 import time
 from scipy.stats import gaussian_kde
 from functools import partial
+import itertools
 
 from botorch.models import MultiTaskGP
 from gpytorch.priors import LKJCovariancePrior, SmoothedBoxPrior
@@ -21,6 +22,7 @@ from botorch.fit import fit_gpytorch_mll_torch
 
 from .utils import adict, display_fig, to_numpy, log_h, clear_cuda_tensors
 from .normalize import Transform
+from .initialize import init_samples
 
 torch.set_default_dtype(torch.float64)
 
@@ -32,12 +34,16 @@ Bayesian Optimization with Multi-Task Gaussian Processes
 see: https://botorch.readthedocs.io/en/latest/models.html#botorch.models.multitask.MultiTaskGP
 
 """
-
+#  X_feats,
+#  Y_obs, *,
 class MultiTaskSampler:
     def __init__(self,
-                 X_feats,
-                 Y_obs, *,
-                 Y_test=None,
+                 num_inputs, # number of input features (checkpoints)
+                 num_outputs, # number of outputs (tasks) per feature
+                 *,
+                 func=None, # black-box function to sample from : f(i,j) -> y
+                 Y_gold=None, # 2D : ALL y values (i.e. gold standard... optional)
+                 X_feats=None, # 1D : original input feature space
                  max_iterations=1000, # max iterations for MLE fit
                  lr=0.1, # learning rate for MLE fit
                  lr_gamma=0.98, # learning rate decay for scheduler
@@ -51,25 +57,11 @@ class MultiTaskSampler:
                  use_cuda=False,
                  run_dir=None,
                  ): 
-        
         #--------------------------------------------------------------------------
-        self.X_feats = X_feats # 1D : original input feature space
-        self.Y_obs = Y_obs # 2D : observed y values (np.nan everywhere else)
-        self.Y_test = Y_test # 2D : ALL y values (optional)
-        
-        # normalize X_feats to unit interval [0..1]
-        self.X_test, self.X_norm = Transform.normalize(X_feats)
-        
-        # create X_inputs (d x 2) that includes task indices
-        all_idx = np.where(np.ones_like(Y_obs))
-        self.X_inputs = torch.tensor([ [self.X_test[i], j] for i, j in  zip(*all_idx) ], dtype=torch.float64)
-        
-        # create X_train (d x 2) and Y_train (d x 1) from observed data
-        sample_idx = np.where(self.S)
-        self.X_train = torch.tensor([ [self.X_test[i], j] for i, j in  zip(*sample_idx) ], dtype=torch.float64)
-        self.Y_train = torch.tensor( Y_obs[sample_idx], dtype=torch.float64 ).unsqueeze(-1)
-
-        #--------------------------------------------------------------------------
+        self.n, self.m = num_inputs, num_outputs
+        self.func = func
+        self.Y_gold = Y_gold
+        self.X_feats = np.arange(num_inputs) if X_feats is None else X_feats
         self.lr = lr
         self.lr_gamma = lr_gamma
         self.max_iterations = max_iterations
@@ -84,14 +76,26 @@ class MultiTaskSampler:
         self.run_dir = run_dir
         self.logger = logging.getLogger(__name__)
         self.device = torch.device("cuda" if torch.cuda.is_available() and use_cuda else "cpu")
+        
+        #--------------------------------------------------------------------------
+        if func is None:
+            if Y_gold is None:
+                raise ValueError('func is None and Y_gold is None, no data source for next sample')
+            else:
+                # if func is None, then use Y_gold as the function to sample from
+                self.func = lambda i,j: Y_gold[i,j]
+          
+        # normalize X_feats to unit interval [0..1]
+        self.X_test, self.X_norm = Transform.normalize(self.X_feats)
+        
+        # create X_inputs (d x 2) that includes task indices
+        all_idx = np.where(np.ones((num_inputs, num_outputs)))
+        self.X_inputs = torch.tensor([ [self.X_test[i], j] for i, j in  zip(*all_idx) ], dtype=torch.float64).to(self.device)
+
         self.log(f'Using device: {self.device}')
-    
-        self.X_inputs = self.X_inputs.to(self.device)
         self.round = 0
         self.reset()
-        
-        # get dimensions of Y_obs (n x m): n = number of x_features, m = number of tasks
-        self.n, self.m = Y_obs.shape
+
         
     def log(self, msg, verbosity_level=1):
         if self.verbosity >= verbosity_level:
@@ -116,9 +120,40 @@ class MultiTaskSampler:
         """
         return np.mean(self.S)
     
+    def initialize(self):
+        # Get boolean mask S for initial sample points...
+        # **NOTE** : We need at least 2 samples-per-task to avoid numerical instability
+        S = init_samples(self.n, self.m, log=self.log)
+        
+        # get list of i,j indices for sampled points
+        sample_idx = np.where(S)
+
+        # Get initial observations according to boolean mask S
+        Y_obs = np.full(S.shape, np.nan)
+        for i, j in  zip(*sample_idx):
+            self.log(f'Computing initial sample: [{self.X_feats[i]},{j}]')
+            Y_obs[i, j] = self.func(i, j)
+        
+        # store observed data
+        self.Y_obs = Y_obs
+        
+        # create X_train (d x 2) and Y_train (d x 1) from observed data
+        self.X_train = torch.tensor([ [self.X_test[i], j] for i, j in  zip(*sample_idx) ], dtype=torch.float64)
+        self.Y_train = torch.tensor( Y_obs[sample_idx], dtype=torch.float64 ).unsqueeze(-1)
+
+    
     # fit model and recompute posterior predictions
-    def update(self, use_large=False):
+    def update(self):
+        # if Y_obs is not set, run initialization
+        try:
+            self.Y_obs[0][0]
+        except:
+            self.initialize()
+        
+        # run MLE fit loop
         self.fit_loop()
+        
+        # compute Gaussian process posterior 
         return self.predict()
     
     # repeatedly attempt to fit model
@@ -430,35 +465,19 @@ class MultiTaskSampler:
         return next_i, next_j
     
     # add next sample to training set
-    def add_next_sample(self, Y=None):
+    def sample(self):
         
-        # check if Y is provided
-        if Y is None:
-            Y = self.Y_test
-        if Y is None:
-            raise ValueError('Y is None, no data source for next sample')
-        
-        if self.next_i is None or self.next_j is None:
-            # check if Y is scalar value
-            if np.isscalar(Y):
-                raise ValueError('Y is a scalar value, but next sample point is not chosen yet')
-            self.get_next_sample_point()
-            
         # get next sample indices
-        next_i, next_j = self.next_i, self.next_j
+        if self.next_i is None or self.next_j is None:
+            next_i, next_j = self.get_next_sample_point()
+        else:
+            next_i, next_j = self.next_i, self.next_j
         
         # acquire next observation
-        if np.isscalar(Y):
-            y = Y
-        elif callable(Y):
-            # if y is callable function, then call it with next_i, next_j
-            y = Y(next_i, next_j)
-        else:
-            # else, access Y directly with next_i, next_j
-            try:
-                y = Y[next_i][next_j]
-            except Exception as e:
-                raise ValueError(f'Error accessing Y with next_i, next_j: {e}')
+        try:
+            y = self.func(next_i, next_j)
+        except Exception as e:
+            raise ValueError(f'Error accessing Y with next_i, next_j: {e}')
             
         # add new sample to training set (observe) and update mask
         self.X_train = torch.cat([self.X_train, torch.tensor([ [self.X_test[next_i], next_j] ], dtype=torch.float64)])
@@ -531,8 +550,8 @@ class MultiTaskSampler:
         legend = []
         
         # Plot all data as black stars (optional?)
-        if self.Y_test is not None:
-            ax1.plot(x, self.Y_test[:, j], 'k*')
+        if self.Y_gold is not None:
+            ax1.plot(x, self.Y_gold[:, j], 'k*')
             legend.append('Unobserved')
         
         # Plot training (observed) data as red circles

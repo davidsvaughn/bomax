@@ -10,8 +10,8 @@ from glob import glob
 from scipy import ndimage
 
 # Import from the bomax package
-from bomax.initialize import init_samples
 from bomax.sampler import MultiTaskSampler
+# from bomax.initialize import init_samples/
 
 from synthetic import generate_learning_curves
 
@@ -22,7 +22,7 @@ plt.ioff()
 local = os.path.exists('/home/david')
 
 rand_seed = -1
-rand_seed = 8227
+# rand_seed = 8227
 
 #--------------------------------------------------------------------------
 
@@ -35,14 +35,13 @@ def load_example_dataset(file_name):
     df = pd.read_csv(os.path.join(data_dir, file_name), delimiter='\t')
 
     # Extract checkpoint numbers
-    X_steps = df['CHECKPOINT'].apply(lambda x: int(x.split('-')[1])).values
+    X_feats = df['CHECKPOINT'].apply(lambda x: int(x.split('-')[1])).values
     
-    # Identify test columns (excluding average)
+    # Identify task columns (excluding average)
     task_cols = [col for col in df.columns if col.startswith('TASK_')]
     Y_values = df[task_cols].values
-    # n,m = Y_values.shape
     
-    return X_steps, Y_values
+    return X_feats, Y_values
 
 
 #--------------------------------------------------------------------------
@@ -100,13 +99,13 @@ log(f'Random seed: {rand_seed}')
 
 #--------------------------------------------------------------------------
 # example dataset
-X_steps, Y_values = load_example_dataset(data_file)
+X_feats, Y_values = load_example_dataset(data_file)
 
 # synthetic dataset
-# X_steps, Y_values =  generate_learning_curves(50, 25)
+# X_feats, Y_values =  generate_learning_curves(50, 25)
 
-n, m = Y_values.shape
-log(f'Y_values.shape={Y_values.shape} (n={n} checkpoints, m={m} tasks)')
+num_inputs, num_outputs = Y_values.shape
+log(f'Y_values.shape={Y_values.shape} (num_inputs={num_inputs} checkpoints, num_outputs={num_outputs} tasks)')
 
 #--------------------------------------------------------------------------
 # Compute Gold Standard Variants
@@ -115,7 +114,7 @@ log(f'Y_values.shape={Y_values.shape} (n={n} checkpoints, m={m} tasks)')
 Y_mean = Y_values.mean(axis=1)
 
 # Smooth each task independently
-Y_smooth = np.array([ndimage.gaussian_filter1d(col, sigma=n/15) for col in Y_values.T]).T
+Y_smooth = np.array([ndimage.gaussian_filter1d(col, sigma=num_inputs/15) for col in Y_values.T]).T
 
 # Smoothed mean over all tasks
 Y_smooth_mean = Y_smooth.mean(axis=1)
@@ -125,46 +124,40 @@ Y_smooth_mean = Y_smooth.mean(axis=1)
 
 # raw data
 i = np.argmax(Y_values.mean(axis=1))
-raw_x_max, raw_y_max = X_steps[i], Y_values.mean(axis=1)[i]
+raw_x_max, raw_y_max = X_feats[i], Y_values.mean(axis=1)[i]
 
 # smoothed data
 i = np.argmax(Y_smooth_mean)
-smooth_x_max, smooth_y_max = X_steps[i], Y_smooth_mean[i]
+smooth_x_max, smooth_y_max = X_feats[i], Y_smooth_mean[i]
 
 log(f'BEST CHECKPOINT:')
-log(f'\tRAW:     \t{raw_x_max}\tY={raw_y_max:.4f}')
-log(f'\tSMOOTHED:\t{smooth_x_max}\tY={smooth_y_max:.4f}')
+log(f'   RAW:     \t{raw_x_max}\tY={raw_y_max:.4f}')
+log(f'   SMOOTHED:\t{smooth_x_max}\tY={smooth_y_max:.4f}')
 
 #--------------------------------------------------------------------------
 # Initialize the Sampler
 
-# Get boolean mask S for initial sample points...
-# **NOTE** : We need 2 samples-per-task to avoid numerical instability
-S = init_samples(n, m, log=log)
-
-# Get initial samples according to boolean mask S
-Y_obs = np.where(S, Y_values, np.nan)
-
-# Define sampler and seed with initial samples            
-sampler = MultiTaskSampler(X_steps, Y_obs, 
-                           eta=0.25,
-                        #    use_cuda=True,
+sampler = MultiTaskSampler(num_inputs, num_outputs,
+                           func=lambda i,j: Y_values[i,j],  # black-box function callback
+                           X_feats=X_feats, # optional (important when not equally spaced)
                            run_dir=run_dir)
 
-# Fit model to initial samples
+# seed with initial observations (at least 2 obs/task) for numerical stability
+sampler.initialize()
+
+# Fit model to initial observations
 sampler.update()
 
-# Compare with Gold Standard data (only possible in test runs)
+# Compare with Gold Standard data (only possible if all Y_values are available)
 sampler.compare(Y_smooth, Y_values)
 
 #---------------------------------------------------------------------------
-# Main BO Loop
+# Main Bayesian optimization Loop
 
-# Run Bayesian optimization loop
 while sampler.sample_fraction < 0.05:
     
-    # determine next sample coordinates and query black-box function - takes optional callback function: f(i,j)
-    _, next_task = sampler.add_next_sample(lambda i,j: Y_values[i,j])
+    # determine next sample coordinates, and query black-box function
+    next_checkpoint, next_task = sampler.sample()
     
     # update the GP model with the new sample
     sampler.update()
