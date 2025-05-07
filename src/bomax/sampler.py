@@ -477,12 +477,12 @@ class MultiTaskSampler:
     def plot_posterior_mean(self, y_ref=None, y_gold=None, ref_color='darkviolet', gold_color='violet', prefix='posterior_mean'):
         legend = []
         plt.figure(figsize=(15, 10))
-        plt.plot(self.X_feats, self.y_mean, 'b')
-        legend.append('GP Posterior Mean')
-        plt.fill_between(self.X_feats, self.y_mean - 2*self.y_sigma, self.y_mean + 2*self.y_sigma, alpha=0.5)
-        legend.append('GP 2$\sigma$ Confidence')
         plt.axvline(self.current_best_checkpoint, color='b', linestyle='--')
+        plt.fill_between(self.X_feats, self.y_mean - 2*self.y_sigma, self.y_mean + 2*self.y_sigma, alpha=0.5)
+        plt.plot(self.X_feats, self.y_mean, 'b')
         legend.append('GP Optimum')
+        legend.append('GP 2$\sigma$ Confidence')
+        legend.append('GP Posterior Mean')
         
         if y_ref is None and y_gold is not None:
             y_ref = y_gold
@@ -493,12 +493,10 @@ class MultiTaskSampler:
         if y_ref is not None:
             i = np.argmax(y_ref)
             ref_best_input = self.X_feats[i]
-            plt.plot(self.X_feats, y_ref, ref_color)
-            legend.append('Target (smoothed) Mean')
-            
-            # draw vertical dotted line at best input
             plt.axvline(ref_best_input, color=ref_color, linestyle='--')
+            plt.plot(self.X_feats, y_ref, ref_color)
             legend.append('Target Optimum')
+            legend.append('Target (smoothed) Mean')
             
         # compare to gold standard
         if y_gold is not None:
@@ -506,8 +504,10 @@ class MultiTaskSampler:
             gold_best_input = self.X_feats[i]
             plt.plot(self.X_feats, y_gold, gold_color)
             legend.append('Raw (noisy) Mean')
-            
-        plt.legend(legend, loc='best')
+        
+        # add legend to plot
+        # legend.reverse()
+        plt.legend(legend, loc='best', reverse=True)
         
         if y_ref is not None:
             y_min, y_max = plt.ylim()
@@ -517,7 +517,7 @@ class MultiTaskSampler:
             plt.ylim(y_min, y_max)
             plt.fill_betweenx([y_min, y_max], self.current_best_checkpoint, ref_best_input, color='red', alpha=0.1)
         
-        plt.title(f'Round: {self.round-1} | Current Best Checkpoint: {self.current_best_checkpoint}')
+        plt.title(f'Round {self.round-1}   |   {100*self.sample_fraction:.2f}% points sampled')
         
         # add x-axis and y-axis labels
         plt.xlabel('checkpoint')
