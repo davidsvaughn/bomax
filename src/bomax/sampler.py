@@ -517,7 +517,7 @@ class MultiTaskSampler:
             plt.ylim(y_min, y_max)
             plt.fill_betweenx([y_min, y_max], self.current_best_checkpoint, ref_best_input, color='red', alpha=0.1)
         
-        plt.title(f'Round {self.round-1}   |   {100*self.sample_fraction:.2f}% points sampled')
+        plt.title(f'Round {self.round-1}   |   {100*self.sample_fraction:.2f}% points sampled', fontsize=18)
         
         # add x-axis and y-axis labels
         plt.xlabel('checkpoint')
