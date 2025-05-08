@@ -43,7 +43,6 @@ def load_example_dataset(file_name):
     
     return X_feats, Y_values
 
-
 #--------------------------------------------------------------------------
 # SET PARAMETERS
 
@@ -99,34 +98,34 @@ log(f'Random seed: {rand_seed}')
 
 #--------------------------------------------------------------------------
 # example dataset
-X_feats, Y_values = load_example_dataset(data_file)
+X_feats, Y_curves = load_example_dataset(data_file)
 
 # synthetic dataset
-# X_feats, Y_values =  generate_learning_curves(50, 25)
+# X_feats, Y_curves =  generate_learning_curves(50, 25)
 
-num_inputs, num_outputs = Y_values.shape
-log(f'Y_values.shape={Y_values.shape} (num_inputs={num_inputs} checkpoints, num_outputs={num_outputs} tasks)')
+num_inputs, num_outputs = Y_curves.shape
+log(f'Y_curves.shape={Y_curves.shape} (num_inputs={num_inputs} checkpoints, num_outputs={num_outputs} tasks)')
 
 #--------------------------------------------------------------------------
 # Compute Gold Standard Variants
 
-# Raw (noisy) mean over all tasks (full dataset) 
-Y_mean = Y_values.mean(axis=1)
+# Raw (noisy) mean over all tasks (i.e. all learning curves) 
+Y_mean = Y_curves.mean(axis=1)
 
-# Smooth each task independently
-Y_smooth = np.array([ndimage.gaussian_filter1d(col, sigma=num_inputs/15) for col in Y_values.T]).T
+# Smooth each task (learning curve) independently
+Y_smooth_curves = np.array([ndimage.gaussian_filter1d(col, sigma=num_inputs/15) for col in Y_curves.T]).T
 
-# Smoothed mean over all tasks
-Y_smooth_mean = Y_smooth.mean(axis=1)
+# Smoothed mean = mean of all smoothed curves
+Y_smooth_mean = Y_smooth_curves.mean(axis=1)
 
 #--------------------------------------------------------------------------
-# Find Optimal Checkpoint (using gold standard data)
+# Compute True Optimal Checkpoint (using Gold Standard data)
 
-# raw data
-i = np.argmax(Y_values.mean(axis=1))
-raw_x_max, raw_y_max = X_feats[i], Y_values.mean(axis=1)[i]
+# using raw data
+i = np.argmax(Y_curves.mean(axis=1))
+raw_x_max, raw_y_max = X_feats[i], Y_curves.mean(axis=1)[i]
 
-# smoothed data
+# using smoothed data
 i = np.argmax(Y_smooth_mean)
 smooth_x_max, smooth_y_max = X_feats[i], Y_smooth_mean[i]
 
@@ -135,10 +134,10 @@ log(f'   RAW:     \t{raw_x_max}\tY={raw_y_max:.4f}')
 log(f'   SMOOTHED:\t{smooth_x_max}\tY={smooth_y_max:.4f}')
 
 #--------------------------------------------------------------------------
-# Initialize the Sampler
 
+# Initialize the Sampler
 sampler = MultiTaskSampler(num_inputs, num_outputs,
-                           func=lambda i,j: Y_values[i,j],  # black-box function callback
+                           func=lambda i,j: Y_curves[i,j],  # black-box function callback
                            X_feats=X_feats, # optional (important when not equally spaced)
                            run_dir=run_dir)
 
@@ -148,12 +147,12 @@ sampler.initialize()
 # Fit model to initial observations
 sampler.update()
 
-# Compare with Gold Standard data (only possible if all Y_values are available)
-sampler.compare(Y_smooth, Y_values)
+# Compare with Gold Standard data
+sampler.compare(Y_smooth_curves)
 
 #---------------------------------------------------------------------------
-# Main Bayesian optimization Loop
 
+# Main Bayesian optimization Loop
 while sampler.sample_fraction < 0.05:
     
     # determine next sample coordinates, and query black-box function
@@ -162,8 +161,8 @@ while sampler.sample_fraction < 0.05:
     # update the GP model with the new sample
     sampler.update()
     
-    # Compare with Gold Standard data, and plot results
-    sampler.compare(Y_smooth, Y_values)
+    # Compare with Gold Standard data and plot results
+    sampler.compare(Y_smooth_curves)
     # sampler.plot_task(next_task, '- AFTER')
     sampler.plot_posterior_mean(Y_smooth_mean, Y_mean)
 
