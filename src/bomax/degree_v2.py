@@ -77,7 +77,7 @@ def max_intersections_np(x, y, num_trials=10_000, rng=None, eps=1e-12):
     signs = np.sign(diff)
     # Boolean matrix True where sign change between consecutive points
     flips = signs[:, :-1] * signs[:, 1:] < 0
-    intersections = flips.sum(axis=1)           # (T,)
+    intersections = 1 + flips.sum(axis=1)           # (T,)
     # subtract 1 to ignore the two anchor points
     intersections = np.maximum(0, intersections - 1)
 
@@ -117,7 +117,10 @@ def max_intersections_cp(x, y, num_trials=10_000, rng=None, eps=1e-12):
     dx = x2 - x1
 
     # -- 2. slopes/intercepts (vertical handled via +Inf) -------------------
-    slope = cp.divide(y2 - y1, dx, out=cp.full_like(dx, cp.inf), where=dx!=0)
+    slope = cp.zeros_like(dx)
+    non_zero_mask = dx != 0
+    slope[non_zero_mask] = (y2[non_zero_mask] - y1[non_zero_mask]) / dx[non_zero_mask]
+    slope[~non_zero_mask] = cp.inf
     intercept = y1 - slope * x1      # if slope==inf the values won't be used
 
     # -- 3. evaluate curve–line differences for *all* trials ----------------
@@ -615,17 +618,17 @@ def demonstrate_with_example():
     y3 = np.sin(x) + 0.5 * np.sin(3 * x) + 0.3 * np.sin(7 * x)  # High wiggliness
     
     # Compute wiggliness scores
-    num_trials = 1000
+    num_trials = 100
     
-    # Plot the curves
-    score1, score2, score3 = 1,2,3
-    plt.figure(figsize=(10, 6))
-    plt.plot(x, y1, label=f"Low wiggliness (score={score1})")
-    plt.plot(x, y2, label=f"Medium wiggliness (score={score2})")
-    plt.plot(x, y3, label=f"High wiggliness (score={score3})")
-    plt.legend()
-    plt.title("Curves with Different Wiggliness Levels")
-    plt.show()
+    # # Plot the curves
+    # score1, score2, score3 = 1,2,3
+    # plt.figure(figsize=(10, 6))
+    # plt.plot(x, y1, label=f"Low wiggliness (score={score1})")
+    # plt.plot(x, y2, label=f"Medium wiggliness (score={score2})")
+    # plt.plot(x, y3, label=f"High wiggliness (score={score3})")
+    # plt.legend()
+    # plt.title("Curves with Different Wiggliness Levels")
+    # plt.show()
     
 
     func_list = [
@@ -652,7 +655,350 @@ def demonstrate_with_example():
         except KeyboardInterrupt:
             print(f"Skipping {func.__name__} due to keyboard interrupt")
             continue
+        
+#===================================================================================================
+
+# def max_line_intersections_gpu(x, Y, num_trials=200_000, 
+#                                batch_trials=20_000, device="cuda"):
+#     """
+#     x : 1-D float array  (N,)
+#     Y : 2-D float array  (N, C)   ← each column is a curve
+#     returns max intersections *per curve*  (C,)
+#     """
+#     x  = torch.as_tensor(x, dtype=torch.float16, device=device)
+#     Y  = torch.as_tensor(Y, dtype=torch.float16, device=device)
+
+#     N, C = Y.shape
+#     mx = torch.zeros(C, dtype=torch.int32, device=device)
+
+#     rng = torch.Generator(device=device)
+#     for _ in range((num_trials + batch_trials - 1)//batch_trials):
+#         T = min(batch_trials, num_trials)
+#         num_trials -= T
+
+#         idx1 = torch.randint(0, N, (T,), generator=rng, device=device)
+#         idx2 = torch.randint(0, N, (T,), generator=rng, device=device)
+#         while True:                          # enforce idx2 ≠ idx1
+#             coll = idx1 == idx2
+#             if not coll.any(): break
+#             idx2[coll] = torch.randint(0, N, (coll.sum(),),
+#                                        generator=rng, device=device)
+
+#         x1, x2 = x[idx1], x[idx2]                       # (T,)
+#         Y1, Y2 = Y[idx1], Y[idx2]                       # (T,C)
+
+#         dx = x2 - x1
+#         valid = dx != 0                                 # skip verticals
+#         if not valid.any(): continue
+
+#         slope = (Y2 - Y1) / dx[:, None]                # (T,C)
+#         b     = Y1 - slope * x1[:, None]               # (T,C)
+
+#         # line_y  shape (T,N,C)
+#         line_y = slope[:, None, :] * x[None, :, None] + b[:, None, :]
+
+#         diff   = Y[None, :, :] - line_y              # (T,N,C)
+#         signs  = torch.sign(diff)
+#         flips  = (signs[:, :-1, :] * signs[:, 1:, :] < 0).sum(1)  # (T,C)
+#         inter  = torch.clamp(flips, min=0)         # ignore anchors
+#         mx     = torch.maximum(mx, inter.max(0).values)
+
+#     return max(mx.cpu().tolist())      # list of ints length C
+
+import torch
+
+def max_line_intersections_gpu(x, Y, num_trials=200_000,
+                               batch_trials=20_000, device="cuda"):
+    """
+    x : 1-D tensor / array, shape (N,)
+    Y : 2-D tensor / array, shape (N, C) – each column a curve
+    Returns the **global** max intersection count (anchors *included*).
+    """
+    x = torch.as_tensor(x, dtype=torch.float16, device=device)
+    Y = torch.as_tensor(Y, dtype=torch.float16, device=device)
+    N, C = Y.shape
+    mx = torch.zeros(C, dtype=torch.int32, device=device)
+
+    rng = torch.Generator(device=device)         # optional .manual_seed(...)
+    trials_left = num_trials
+    while trials_left > 0:
+        T = min(batch_trials, trials_left)
+        trials_left -= T
+
+        idx1 = torch.randint(0, N, (T,), generator=rng, device=device)
+        idx2 = torch.randint(0, N, (T,), generator=rng, device=device)
+        # make sure idx1 != idx2
+        dup = idx1 == idx2
+        while dup.any():
+            idx2[dup] = torch.randint(0, N, (dup.sum(),),
+                                       generator=rng, device=device)
+            dup = idx1 == idx2
+
+        x1, x2 = x[idx1], x[idx2]
+        dx = x2 - x1
+
+        # ---------- vertical-line guard (quick-fix) --------------------
+        valid = dx != 0                          # keep only non-vertical
+        if not valid.any():
+            continue                            # every trial vertical → skip
+
+        idx1, idx2 = idx1[valid], idx2[valid]
+        x1, x2, dx = x1[valid], x2[valid], dx[valid]
+        Y1, Y2 = Y[idx1], Y[idx2]               # (T_valid, C)
+
+        slope = (Y2 - Y1) / dx[:, None]         # (T_valid, C)
+        b     = Y1 - slope * x1[:, None]
+
+        line_y = slope[:, None, :] * x[None, :, None] + b[:, None, :]
+        diff   = Y[None, :, :] - line_y
+
+        signs  = torch.sign(diff)
+        flips  = (signs[:, :-1, :] * signs[:, 1:, :] < 0).sum(1)  # (T_valid, C)
+
+        inter  = flips                     # anchors INCLUDED
+        mx     = torch.maximum(mx, inter.max(0).values)
+
+    # return single scalar (overall max); drop .max() if you want per-curve
+    return mx.max().item()
+
+def max_intersections_shared_gpu(x, Y,                 # (N,), (N, C)
+                                 num_trials     = 200_000,
+                                 curve_blk      = 256,
+                                 device         = "cuda"):
+    """
+    Shared-line version: every curve is tested against the *same* set of random
+    lines, defined once from a reference curve (here: the mean curve).
+
+    Returns
+    -------
+    int  – global maximum #intersections **including** anchors
+    """
+
+    # ---- tensors on GPU ----------------------------------------------------
+    x  = torch.as_tensor(x, dtype=torch.float16, device=device)          # (N,)
+    Y  = torch.as_tensor(Y, dtype=torch.float16, device=device)          # (N,C)
+    N, C = Y.shape
+    mx = torch.zeros(C, dtype=torch.int32, device=device)
+
+    # ---- 1. choose reference curve & pre-compute the lines -----------------
+    ref = Y.mean(dim=1)                 # (N,)  ← could pick Y[:,0] or PCA1 etc.
+
+    rng  = torch.Generator(device=device)
+    idx1 = torch.randint(0, N, (num_trials,), generator=rng, device=device)
+    idx2 = torch.randint(0, N, (num_trials,), generator=rng, device=device)
+    dup  = idx1 == idx2
+    while dup.any():                    # enforce distinct anchors
+        idx2[dup] = torch.randint(0, N, (dup.sum(),), generator=rng, device=device)
+        dup = idx1 == idx2
+
+    dx = x[idx2] - x[idx1]
+    keep = dx != 0                      # kill verticals once for all curves
+    idx1, idx2, dx = idx1[keep], idx2[keep], dx[keep]
+    # T = idx1.numel()
+
+    # slopes & intercepts – *single* vector
+    slope = (ref[idx2] - ref[idx1]) / dx          # (T,)
+    b     = ref[idx1] - slope * x[idx1]           # (T,)
+
+    # line_y cached once: shape (T, N)
+    line_y = slope[:, None] * x[None, :] + b[:, None]
+
+    # ---- 2. process curves in small blocks to bound memory -----------------
+    for c0 in range(0, C, curve_blk):
+        c1 = min(c0 + curve_blk, C)
+        Y_blk = Y[:, c0:c1]                       # (N, curve_blk)
+
+        # broadcasting: (T, N, 1) vs (1, N, B) → (T, N, B)
+        diff   = Y_blk[None, :, :] - line_y[:, :, None]
+        signs  = torch.sign(diff)
+        flips  = (signs[:, :-1, :] * signs[:, 1:, :] < 0).sum(1)   # (T,B)
+        inter  = flips                                            # anchors kept
+        mx[c0:c1] = torch.maximum(mx[c0:c1], inter.max(0).values)
+
+    return mx.max().item()      # or return mx.cpu() for per-curve list
+#==================================================================================================
+
+import numpy as np
+
+def max_intersections_shared_np(
+        x, Y,
+        num_trials    = 200_000,
+        trial_block   = 20_000,   # how many random lines to process at once
+        curve_block   = 256,       # how many curves (=columns) per sub-batch
+        keep_anchors  = True,     # False → subtract 1 like the earlier code
+        rng           = None,
+        dtype         = np.float32):
+    """
+    Shared-line intersection estimator (CPU / NumPy).
+
+    x : (N,) array-like               – common x-grid
+    Y : (N, C) array-like             – each column is one curve
+    Returns
+    -------
+    int  – global maximum intersection count across all curves.
+          (Change the final line if you need the per-curve vector.)
+    """
+
+    # -------------- input preparation ------------------------------------
+    x  = np.asarray(x, dtype=dtype)
+    Y  = np.asarray(Y, dtype=dtype)
+    N, C = Y.shape
+    if rng is None:
+        rng = np.random.default_rng()
+
+    # use the mean curve as reference (any deterministic choice is fine)
+    ref = Y.mean(axis=1)                         # (N,)
+
+    # -------------- generate one common set of random lines --------------
+    idx1 = rng.integers(0, N, size=num_trials, dtype=np.int64)
+    idx2 = rng.integers(0, N, size=num_trials, dtype=np.int64)
+    dup  = idx1 == idx2
+    while dup.any():                             # ensure idx1 ≠ idx2
+        idx2[dup] = rng.integers(0, N, size=dup.sum(), dtype=np.int64)
+        dup = idx1 == idx2
+
+    dx      = x[idx2] - x[idx1]
+    valid   = dx != 0                            # kill verticals once for all
+    idx1, idx2, dx = idx1[valid], idx2[valid], dx[valid]
+    T       = idx1.size                          # actual trial count
+
+    slope   = (ref[idx2] - ref[idx1]) / dx       # (T,)
+    intercept = ref[idx1] - slope * x[idx1]      # (T,)
+    # pre-compute line_y for trial blocks
+    line_y_full = slope[:, None] * x[None, :] + intercept[:, None]   # (T, N)
+
+    # -------------- main two-level batching loop -------------------------
+    max_per_curve = np.zeros(C, dtype=np.int32)
+
+    for t0 in range(0, T, trial_block):
+        t1 = min(t0 + trial_block, T)
+        line_y = line_y_full[t0:t1]              # (T_block, N)
+
+        for c0 in range(0, C, curve_block):
+            c1      = min(c0 + curve_block, C)
+            Y_blk   = Y[:, c0:c1]                # (N, B)  view
+
+            # broadcast: (T_block, N, 1) minus (1, N, B) → (T_block, N, B)
+            diff    = Y_blk[None, :, :] - line_y[:, :, None]
+            signs   = np.sign(diff)
+            flips   = (signs[:, :-1, :] * signs[:, 1:, :] < 0).sum(axis=1)  # (T_block, B)
+
+            inter   = flips if keep_anchors else np.maximum(0, flips - 1)
+            max_per_curve[c0:c1] = np.maximum(max_per_curve[c0:c1],
+                                               inter.max(axis=0))
+
+    return int(max_per_curve.max())      # replace with max_per_curve if needed
+
+#==================================================================================================
+
+@nb.njit(parallel=True, fastmath=True)
+def _max_intersections_multi(x, Y, idx1, idx2):
+    N, C = Y.shape
+    T    = idx1.size
+    best = np.zeros(C, np.int32)
+
+    for tc in nb.prange(T * C):        # flat parallel loop
+        t  = tc // C                   # which trial
+        c  = tc %  C                   # which curve
+
+        i, j = idx1[t], idx2[t]
+        dx   = x[j] - x[i]
+        if dx == 0.0:
+            continue
+
+        m = (Y[j, c] - Y[i, c]) / dx
+        b = Y[i, c] - m * x[i]
+
+        prev = 0
+        flips = 0
+        for k in range(N):
+            diff = Y[k, c] - (m * x[k] + b)
+            if diff == 0.0:
+                continue
+            s = 1 if diff > 0 else -1
+            if prev != 0 and s != prev:
+                flips += 1
+            prev = s
+        inter = flips if flips > 0 else 0
+        if inter > best[c]:
+            best[c] = inter
+    return best
+
+def max_line_intersections_numba_multi(x, Y, num_trials=200_000, rng=None):
+    if rng is None:
+        rng = np.random.default_rng()
+    x  = np.asarray(x, dtype=np.float64)
+    Y  = np.asarray(Y, dtype=np.float64)
+    N  = x.size
+
+    idx1 = rng.integers(0, N, size=num_trials, dtype=np.int64)
+    idx2 = rng.integers(0, N, size=num_trials, dtype=np.int64)
+    coll = idx1 == idx2
+    while coll.any():                               # ensure distinctness
+        idx2[coll] = rng.integers(0, N, size=coll.sum(), dtype=np.int64)
+        coll = idx1 == idx2
+
+    return max(_max_intersections_multi(x, Y, idx1, idx2))   # 1-D int32 array
+
+def demo_2d():
+    # Generate example data with increasing wiggliness
+    x = np.linspace(0, 10, 1000)
+    
+    # Three curves with different levels of wiggliness
+    y1 = np.sin(x)                    # Low wiggliness
+    y2 = np.sin(x) + 0.5 * np.sin(3 * x)  # Medium wiggliness
+    y3 = np.sin(x) + 0.5 * np.sin(3 * x) + 0.3 * np.sin(7 * x)  # High wiggliness
+    
+    # create a 2D array with y1 repeated 100 times column-wise
+    cols = 100
+    Y1 = np.tile(y1, (cols, 1)).T
+    Y2 = np.tile(y2, (cols, 1)).T
+    Y3 = np.tile(y3, (cols, 1)).T
+    
+    # Compute wiggliness scores
+    num_trials = 100
+    
+    # # Plot the curves
+    # score1, score2, score3 = 1,2,3
+    # plt.figure(figsize=(10, 6))
+    # plt.plot(x, y1, label=f"Low wiggliness (score={score1})")
+    # plt.plot(x, y2, label=f"Medium wiggliness (score={score2})")
+    # plt.plot(x, y3, label=f"High wiggliness (score={score3})")
+    # plt.legend()
+    # plt.title("Curves with Different Wiggliness Levels")
+    # plt.show()
+    
+
+    func_list = [
+        max_line_intersections_gpu,
+        max_intersections_shared_gpu,
+        max_intersections_shared_np,
+        # max_line_intersections_numba_multi,
+        # max_intersections_np,
+        # max_intersections_cp,
+        # max_intersections_torch,
+        # max_intersections_numba,
+    ]
+    
+    for func in func_list:
+        try:
+            start_time = time.time()
+            score1 = func(x, Y1, num_trials=num_trials)
+            score2 = func(x, Y2, num_trials=num_trials)
+            score3 = func(x, Y3, num_trials=num_trials)
+            end_time = time.time()
+            sec = (end_time - start_time)/cols
+            print(f"Wiggliness scores:")
+            print(f"Curve 1 (low): {score1}")
+            print(f"Curve 2 (medium): {score2}")
+            print(f"Curve 3 (high): {score3}")
+            print(f"Time taken for {func.__name__}: {sec:.4f} seconds")
+        except KeyboardInterrupt:
+            print(f"Skipping {func.__name__} due to keyboard interrupt")
+            continue
+
 
 if __name__ == "__main__":
     # Demonstration
-    demonstrate_with_example()
+    # demonstrate_with_example()
+    demo_2d()
