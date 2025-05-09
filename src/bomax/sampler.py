@@ -76,6 +76,7 @@ class MultiTaskSampler:
         self.run_dir = run_dir
         self.logger = logging.getLogger(__name__)
         self.device = torch.device("cuda" if torch.cuda.is_available() and use_cuda else "cpu")
+        self.timeout = 0
         #---------------------------------------------------------------------
         if func is None:
             if Y_gold is None:
@@ -175,7 +176,7 @@ class MultiTaskSampler:
             else:
                 if i+1 < self.max_attempts:
                     self.log('-'*110)
-                    self.log(f'FAILED... ATTEMPT {i+2}')
+                    self.log(f'ATTEMPT {i+1} FAILED.  ATTEMPT {i+2}...')
         raise Exception('ERROR: Failed to train model - max_attempts reached')
     
     # train model inner loop
@@ -196,21 +197,6 @@ class MultiTaskSampler:
         
         # parameter for the LKJPrior over correlations
         eta = self.eta
-        
-        #---------------------------------------------------------------------
-        # # if fit failed previously... adjust parameters
-        # if self.num_attempts > 0:
-            
-        #     # rank adjustment...
-        #     if self.rank_fraction > 0:
-        #         w = self.num_attempts * (m-rank)//self.max_attempts
-        #         rank = min(m, rank + w)
-        #         self.log(f'[ROUND-{self.round}]\tFYI: rank adjusted to {rank}', 2)
-                
-        #     # eta adjustment... ??
-        #     if eta is not None:
-        #         eta = eta * (self.eta_gamma ** max(0, self.num_attempts - self.max_attempts//2))
-        #         self.log(f'[ROUND-{self.round}]\tFYI: eta adjusted to {eta:.4g}', 2)
                 
         #---------------------------------------------------------------------
         # Initialize multitask model
@@ -241,16 +227,20 @@ class MultiTaskSampler:
         mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood=self.model.likelihood, model=self.model)
         
         # run MLE fit routine
-        if self.num_attempts < self.max_attempts:
-            # use custom MLE training loop
-            return self.fit_custom(mll)
+        if self.num_attempts < self.max_attempts and self.timeout < 1:
+            # use custom MLE optimization
+            return self.fit_mll_custom(mll)
         
         # else: fall back on BoTorch built-in MLE optimization
-        return self.fit_botorch(mll)
+        if self.num_attempts == self.max_attempts:
+            self.timeout = 10
+        else:
+            self.timeout -= 1
+        return self.fit_mll_botorch(mll)
         
     
     # BoTorch optimization with Adam
-    def fit_botorch(self, mll):
+    def fit_mll_botorch(self, mll):
         try:
             fit_gpytorch_mll_torch(mll,
                                 optimizer=partial(torch.optim.Adam, lr=self.lr),
@@ -262,13 +252,13 @@ class MultiTaskSampler:
         return True
     
     # Custom MLE training loop
-    def fit_custom(self, mll):
+    def fit_mll_custom(self, mll):
         
         # default parameters
         patience = 5
         loss_thresh=0.0001
         degree_thresh=4
-        log_interval=10
+        log_interval=100
         
         # Use the Adam optimizer
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
@@ -294,7 +284,7 @@ class MultiTaskSampler:
             cond_list.append(loss_condition)
         
         # max-degree stopping criterion
-        if degree_thresh is not None and self.num_attempts > 1:
+        if degree_thresh is not None:
         
             # function closure for degree metric
             def degree_func(**kwargs):
@@ -305,7 +295,7 @@ class MultiTaskSampler:
                 value=degree_func,
                 condition="x[-1] > t",
                 t=degree_thresh,
-                interval=10, # only check condition every n iterations (default=1)
+                interval=max(1, 100/(10**(self.num_attempts-1))), # [100, 10, 1, 1, 1, ...]
                 min_iterations=self.min_iterations,
                 verbosity=self.verbosity,
             )
@@ -324,10 +314,18 @@ class MultiTaskSampler:
             optimizer.zero_grad()
             output = self.model(self.model.train_inputs[0])
             try:
-                loss = -mll(output, self.model.train_targets)
+                with gpytorch.settings.cholesky_max_tries(7):
+                    loss = -mll(output, self.model.train_targets)
             except Exception as e:
                 self.logger.error(f'Error in loss calculation at iteration {i}:\n{e}')
+                #------------------------------------------------------------------
                 self.min_iterations = max(self.min_iterations, i//2)
+                x = np.array(degree_condition.history)
+                # get last index where x <= degree_thresh
+                last_idx = np.where(x <= degree_thresh)[0][-1] if len(x) > 0 else 0
+                if last_idx > 0:
+                    self.min_iterations = degree_condition.iterations[last_idx]
+                #------------------------------------------------------------------
                 return False
             
             loss.backward()
@@ -406,16 +404,13 @@ class MultiTaskSampler:
     
     # compare current model to reference and gold standard
     def compare(self, Y_gold):
-        
         # get gold standard mean across tasks
         Y_gold_mean = Y_gold.mean(axis=1)
         Y_gold_max = Y_gold_mean.max()
-        
         current_y_val = Y_gold_mean[self.current_best_idx]
         self.current_err = err = abs(current_y_val - Y_gold_max)/Y_gold_max
         self.log(f'[ROUND-{self.round}]\tCURRENT BEST:\tCHECKPOINT-{self.current_best_checkpoint}\tY_PRED={current_y_val:.4f}\tY_ERR={100*err:.4g}%\t({100*self.sample_fraction:.2f}% sampled)')
     
-       
     # compute R^2 correlation between estimated and gold standard correlations
     def get_r2(self, Y_gold, plot=True):
         Y_ref_corr = np.corrcoef(Y_gold.T)
@@ -638,8 +633,8 @@ class MultiTaskSampler:
         plt.title(f'Round {self.round-1}   |   {100*self.sample_fraction:.2f}% points sampled', fontsize=18)
         
         # add x-axis and y-axis labels
-        plt.xlabel('checkpoint')
-        plt.ylabel('performance')
+        plt.xlabel('model checkpoint')
+        plt.ylabel('benchmark performance')
         
         self.display(prefix=prefix)
         

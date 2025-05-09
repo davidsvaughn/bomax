@@ -16,7 +16,7 @@ class StoppingCondition:
     
     def __init__(self,
                  value=None, # either keyword (string) or function to evaluate
-                 condition=None, # condition to check for stopping : lambda function to call on self.average
+                 condition=None, # stopping condition to check : lambda function to call on self.average
                  alpha=1, # smoothing factor for EMA (<1) or window size for moving average (1==no lookback)
                  interval=1, # evaluate every n iterations
                  patience=1,
@@ -48,6 +48,7 @@ class StoppingCondition:
         self.verbosity = verbosity
 
         self.history = []
+        self.iterations = []
         self.average = None # moving average
         self.iteration = 0
         self.consecutive_count = 0
@@ -59,7 +60,7 @@ class StoppingCondition:
         # condition must be a string with 'x' as the variable, and optionally 't'
         # when called, the following bindings are used: x <- self.average
         #                                               t <- self.threshold
-        self.test = lambda x,t: eval(condition)
+        self.stop_test = lambda x,t: eval(condition)
     
     @property
     def name(self):
@@ -74,6 +75,7 @@ class StoppingCondition:
     def _update(self, value):
         """ Add value to history and update the moving average with a new value. """
         self.history.append(value)
+        self.iterations.append(self.iteration)
         if len(self.history) == 1:
             self.average = [value]
             return
@@ -86,28 +88,18 @@ class StoppingCondition:
             # Simple sliding window average
             self.average += [np.mean(self.history[-self.alpha:])]
 
-    def _run_condition(self, **kwargs):
+    def _run_condition(self, func, **kwargs):
         """ Run the condition function on the moving average. """
         try:
-            success = self.test(self.average, self.threshold)#, **kwargs)
-            
+            success = func(self.average, self.threshold)
         except IndexError as e:
             # this happens when the moving average is empty
             success = False
             self.log(f"{self.prefix}Error evaluating condition: {e}", 3)
-
         except Exception as e:
             success = False
             self.log(f"{self.prefix}Error evaluating condition: {e}", 3)
-            print(f"{self.prefix}Error evaluating condition '{self.condition}': {e}")
-            print()
-            
-        if success:
-            self.consecutive_count += 1
-            self.log(f"{self.prefix}*{self.consecutive_count}/{self.patience}* '{self.name}': condition satisfied: '{self.condition}' ", 2)
-            return True
-        
-        return False
+        return success
     
     def _eval(self, report=None, **kwargs):
         """ Add a new value to the history.
@@ -124,7 +116,7 @@ class StoppingCondition:
             
         elif callable(self.value):
             # if self.value is callable, call it with kwargs
-            if self.iteration>self.min_iterations and self.iteration%self.interval==0:
+            if self.iteration>=self.min_iterations and self.iteration%self.interval==0:
                 value = self.value(**kwargs)
         
         # if value is None, return False
@@ -137,9 +129,16 @@ class StoppingCondition:
         if report is not None:
             report[self.name] = value
         
-        # check if stop condition is met
-        if self.iteration>self.min_iterations and self.iteration%self.interval==0:
-            return self._run_condition(**kwargs)
+        if self.iteration>=self.min_iterations and self.iteration%self.interval==0:
+            # check if stop condition is met
+            stop_true = self._run_condition(self.stop_test, **kwargs)
+            if stop_true:
+                self.consecutive_count += 1
+                self.log(f"{self.prefix}*{self.consecutive_count}/{self.patience}* '{self.name}': condition satisfied: '{self.condition}' ", 2)
+                    
+            return stop_true
+        
+        
         return False
     
     def _reset(self, lr_step=None):

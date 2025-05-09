@@ -44,10 +44,6 @@ def load_example_dataset(file_name):
     return X_feats, Y_values
 
 #--------------------------------------------------------------------------
-# SET PARAMETERS
-
-data_file = 'dataset1.txt'
-# data_file = 'dataset2.txt'
 
 # random seed
 rand_seed = np.random.randint(1000, 10000) if rand_seed <= 0 else rand_seed
@@ -97,11 +93,15 @@ log(f'Run directory: {run_dir}')
 log(f'Random seed: {rand_seed}')
 
 #--------------------------------------------------------------------------
+
+data_file = 'dataset1.txt'
+# data_file = 'dataset2.txt'
+
 # example dataset
 X_feats, Y_curves = load_example_dataset(data_file)
 
 # synthetic dataset
-# X_feats, Y_curves =  generate_learning_curves(50, 25)
+# X_feats, Y_curves =  generate_learning_curves(50, 50)
 
 num_inputs, num_outputs = Y_curves.shape
 log(f'Y_curves.shape={Y_curves.shape} (num_inputs={num_inputs} checkpoints, num_outputs={num_outputs} tasks)')
@@ -153,7 +153,7 @@ sampler.compare(Y_smooth_curves)
 #---------------------------------------------------------------------------
 
 # Main Bayesian optimization Loop
-while sampler.sample_fraction < 0.05:
+while sampler.sample_fraction < 0.1:
     
     # determine next sample coordinates, and query black-box function
     next_checkpoint, next_task = sampler.sample()
