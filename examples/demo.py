@@ -11,7 +11,6 @@ from scipy import ndimage
 from bomax.sampler import MultiTaskSampler
 from bomax.utils import load_example_dataset, generate_learning_curves
 
-
 torch.set_default_dtype(torch.float64)
 plt.ioff()
 
@@ -80,14 +79,14 @@ log(f'Y_curves.shape={Y_curves.shape} (num_inputs={num_inputs} checkpoints, num_
 #--------------------------------------------------------------------------
 # Compute Gold Standard Variants
 
-# Raw (noisy) mean over all tasks (i.e. all learning curves) 
-Y_mean = Y_curves.mean(axis=1)
-
 # Smooth each task (learning curve) independently
 Y_smooth_curves = np.array([ndimage.gaussian_filter1d(col, sigma=num_inputs/15) for col in Y_curves.T]).T
 
 # Smoothed mean = mean of all smoothed curves
 Y_smooth_mean = Y_smooth_curves.mean(axis=1)
+
+# Raw (noisy) mean over all tasks (i.e. all learning curves) 
+Y_mean = Y_curves.mean(axis=1)
 
 #--------------------------------------------------------------------------
 # Compute True Optimal Checkpoint (using Gold Standard data)
@@ -107,7 +106,7 @@ log(f'   SMOOTHED:\t{smooth_x_max}\tY={smooth_y_max:.4f}')
 #--------------------------------------------------------------------------
 # Initialize the Sampler
 
-sampler = MultiTaskSampler(num_inputs, num_outputs,
+sampler = MultiTaskSampler(*Y_curves.shape,  # number of checkpoints and tasks
                            func=lambda i,j: Y_curves[i,j],  # black-box function callback
                            X_feats=X_feats, # optional (important when not equally spaced)
                            run_dir=run_dir)

@@ -61,37 +61,33 @@ Here's a simple example of how to use BOMAX:
 
 ```python
 import numpy as np
-from bomax.initialize import init_samples
 from bomax.sampler import MultiTaskSampler
+from bomax.utils import generate_learning_curves
 
-# Define your feature space and observations
-X_feats = np.array([...])  # Your input features
-Y_obs = np.array([...])    # Your observations (with np.nan for unobserved points)
+# Generate synthetic data
+X_feats, Y_curves =  generate_learning_curves(50, 25)
+
+# Smooth each learning curve (for comparison to GP regression)
+Y_smoothed_curves = np.array([ndimage.gaussian_filter1d(col, sigma=num_inputs/10) for col in Y_curves.T]).T
 
 # Initialize the sampler
-sampler = MultiTaskSampler(
-    X_feats, 
-    Y_obs,
-    eta=0.25,              # LKJ prior parameter
-    rank_fraction=0.5,     # Rank for low-rank approximation
-    ei_beta=0.5,           # Expected Improvement parameter
-    use_cuda=True          # Use GPU if available
-)
+sampler = MultiTaskSampler(*Y_curves.shape,  # number of checkpoints and tasks
+                           func=lambda i,j: Y_curves[i,j],  # black-box function callback
+                          )
 
-# Fit the model to initial samples
-sampler.update()
+# Seed with initial observations (at least 2 obs/task for numerical stability)
+sampler.initialize()
 
 # Run Bayesian optimization loop
-for _ in range(10):
-    # Get next sample point
-    next_i, next_j = sampler.add_next_sample()
-    
-    # Update the model
+for _ in range(50):
+    # Fit the GP model to the current observations
     sampler.update()
     
-    # Visualize results
-    sampler.plot_task(next_j, '- AFTER')
-    sampler.plot_posterior_mean()
+    # Compare with Gold Standard data and generate plot
+    sampler.compare(Y_smoothed_curves)
+    
+    # Determine next sample coordinates and query black-box function
+    sampler.sample()
 ```
 
 For a more detailed example, see the `examples/demo.py` file.
