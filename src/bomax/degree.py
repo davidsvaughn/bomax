@@ -640,9 +640,48 @@ def max_intersections_shared_np(
 
     return int(max_per_curve.max())      # replace with max_per_curve if needed
 
+def curve_metric(x, y, eps=1e-12, **kwargs):
+    """
+    Fast (O[n]) upper–bound for the maximum #intersections between an
+    arbitrary straight line and the curve (x, y).
+
+    Matches `max_intersections_np` for the usual cases:
+      • convex / concave monotone curves  (→ 2)
+      • S-shaped monotone curves          (→ 2 + #inflections)
+      • Wiggly curves with several extrema (→ #monotone-segments)
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    # ---- 1. first-derivative sign pattern --------------------------------
+    slopes = np.diff(y) / np.diff(x)
+    s1 = np.sign(slopes)
+    s1[s1 == 0] = 1                             # treat flats as tiny +ve slopes
+
+    mono_flips = np.count_nonzero(s1[:-1] * s1[1:] < 0)
+    monotone_segs = mono_flips + 1              # pieces of monotonicity
+
+    # ---- 2. if curve already has >1 monotone piece, that is the answer ---
+    if monotone_segs > 1:
+        return monotone_segs                    # matches EI curves, sin-waves…
+
+    # ---- 3. strictly monotone → look at inflections ----------------------
+    # 2nd-derivative (vectorised three-point formula, O[n])
+    curvature = (y[:-2] - 2*y[1:-1] + y[2:]) / (
+                  (x[1:-1] - x[:-2]) * (x[2:] - x[1:-1]) + eps)
+
+    s2 = np.sign(curvature)
+    s2[s2 == 0] = 1
+    inflips = np.count_nonzero(s2[:-1] * s2[1:] < 0)
+
+    # strictly-monotone convex/concave  → 2
+    # strictly-monotone S-shape        → 2 + (#inflections)
+    return 2 + inflips
+
+
 def maximum_degree(model, X_inputs, 
                    m=None, 
-                   num_trials=500,
+                   num_trials=100,
                    ret=None,
                    verbose=False):
     if m is None:
@@ -657,8 +696,16 @@ def maximum_degree(model, X_inputs,
 
     # loop over tasks
     x = to_numpy(X_inputs[X_inputs[:,1]==0][:,0])
-    max_degree = max_intersections_shared_np(x, mean, num_trials=num_trials)
-    # max_degree = max_intersections_shared_gpu(x, mean, num_trials=num_trials)
+    # max_degree = max_intersections_shared_np(x, mean, num_trials=num_trials)
+    
+    # loop over tasks
+    degrees = []
+    for i in range(m):
+        y = to_numpy(mean[:, i])
+        # d = max_intersections_np(x, y, num_trials=num_trials)
+        d = curve_metric(x, y)
+        degrees.append(d)
+        max_degree = np.max(degrees)
         
     stats = adict({'max': max_degree})
     if ret is None: 

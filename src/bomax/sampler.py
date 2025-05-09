@@ -403,13 +403,17 @@ class MultiTaskSampler:
     # #---------------------------------------------------------------------
     
     # compare current model to reference and gold standard
-    def compare(self, Y_gold):
+    def compare(self, Y_gold, Y_mean=None, plot=True):
         # get gold standard mean across tasks
         Y_gold_mean = Y_gold.mean(axis=1)
         Y_gold_max = Y_gold_mean.max()
         current_y_val = Y_gold_mean[self.current_best_idx]
         self.current_err = err = abs(current_y_val - Y_gold_max)/Y_gold_max
         self.log(f'[ROUND-{self.round}]\tCURRENT BEST:\tCHECKPOINT-{self.current_best_checkpoint}\tY_PRED={current_y_val:.4f}\tY_ERR={100*err:.4g}%\t({100*self.sample_fraction:.2f}% sampled)')
+        
+        if plot:
+            Y_gold_mean = Y_gold.mean(axis=1)
+            self.plot_posterior_mean(Y_gold_mean, Y_mean)
     
     # compute R^2 correlation between estimated and gold standard correlations
     def get_r2(self, Y_gold, plot=True):

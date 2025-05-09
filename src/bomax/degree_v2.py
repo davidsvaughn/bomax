@@ -22,14 +22,24 @@ import numba as nb
 
 #==================================================================================================
 
-def max_intersections_np(x, y, num_trials=10_000, rng=None, eps=1e-12):
+def max_intersections_np(x, y, num_trials=100, rng=None, eps=1e-12):
     """
-    Same goal as your original function but 100 % vectorised:
-
+    Estimate the complexity of a curve by:
+    1. Randomly selecting two points on the curve
+    2. Drawing a straight line between them
+    3. Counting intersections between this line and the curve
+    4. Repeating and tracking the maximum count
+    
+    100 % vectorised:
         • no Python loop over trials
         • sign-change counting done with boolean masks
         • zeros handled robustly with a tiny ε-shift
-
+        
+    Args:
+        x: x-coordinates of the curve points (array-like)
+        y: y-coordinates of the curve points (array-like)
+        num_trials: number of random line trials
+        
     Returns
     -------
     int  – maximum #intersections observed over all random lines
@@ -563,8 +573,6 @@ def count_line_curve_intersections_vec(x_values, y_values, num_trials=100):
 def degree_metric(model, X_inputs, 
                   m=None, 
                   num_trials=500,
-                  mean_max=None,
-                  max_max=None,
                   ret=None,
                   verbose=False):
     if m is None:
@@ -605,6 +613,141 @@ def degree_metric(model, X_inputs,
     else:
         stats.copy_to(ret)
         return ret
+    
+#==========================================================================================
+def second_derivative(x, y):
+    """
+    Estimate the second derivative at each point along a curve using vectorized operations.
+    
+    Parameters:
+    X : numpy.ndarray
+        2D array where X[:, 0] contains x-coordinates and X[:, 1] contains y-coordinates.
+        Points should be sorted by x-coordinate.
+    
+    Returns:
+    numpy.ndarray
+        Array of second derivative estimates at each point.
+    """
+    # Extract x and y coordinates
+    # x = X[:, 0]
+    # y = X[:, 1]
+    
+    n = len(x)
+    second_derivatives = np.zeros_like(y)
+    
+    # Need at least 3 points for second derivative
+    if n < 3:
+        return second_derivatives
+    
+    # For interior points (1 to n-2), we can vectorize this
+    # Creating slices for the interior calculations
+    x_prev = x[:-2]  # x_{i-1} values
+    x_curr = x[1:-1]  # x_i values
+    x_next = x[2:]    # x_{i+1} values
+    
+    y_prev = y[:-2]  # y_{i-1} values
+    y_curr = y[1:-1]  # y_i values
+    y_next = y[2:]    # y_{i+1} values
+    
+    # Calculate steps
+    h1 = x_curr - x_prev  # Backward steps
+    h2 = x_next - x_curr  # Forward steps
+    
+    # Vectorized calculation for all interior points
+    second_derivatives[1:-1] = (
+        2 * y_prev / (h1 * (h1 + h2)) -
+        2 * y_curr / (h1 * h2) +
+        2 * y_next / (h2 * (h1 + h2))
+    )
+    
+    # First point
+    h1, h2 = x[1] - x[0], x[2] - x[1]
+    second_derivatives[0] = (
+        2 * y[0] / (h1 * (h1 + h2)) -
+        2 * y[1] / (h1 * h2) +
+        2 * y[2] / (h2 * (h1 + h2))
+    )
+    
+    # Last point
+    h1, h2 = x[n-2] - x[n-3], x[n-1] - x[n-2]
+    second_derivatives[n-1] = (
+        2 * y[n-3] / (h1 * (h1 + h2)) -
+        2 * y[n-2] / (h1 * h2) +
+        2 * y[n-1] / (h2 * (h1 + h2))
+    )
+    
+    return second_derivatives
+
+# wiggliness metric based on the number of flips of second derivative
+def curve_metric_old(x, y, **kwargs):
+    """
+    Estimate the wiggliness of a curve by:
+    1. Computing the second derivative
+    2. Counting the number of sign changes in the second derivative
+    3. Repeating and tracking the maximum count
+
+    Args:
+        x_values: x-coordinates of the curve points (array-like)
+        y_values: y-coordinates of the curve points (array-like)
+        num_trials: number of random line trials
+
+    Returns:
+        max_intersections: maximum number of intersections found
+    """
+    # Convert inputs to NumPy arrays
+    x_values = np.asarray(x, dtype=float)
+    y_values = np.asarray(y, dtype=float)
+    
+    # Compute second derivative
+    second_deriv = second_derivative(x_values, y_values)
+    
+    # Count sign changes in the second derivative
+    signs = np.sign(second_deriv)
+    changes = np.diff(signs)        # difference between consecutive signs
+    flips = np.count_nonzero(changes != 0) + 1
+    
+    return flips
+
+def curve_metric(x, y, eps=1e-12, **kwargs):
+    """
+    Fast (O[n]) upper–bound for the maximum #intersections between an
+    arbitrary straight line and the curve (x, y).
+
+    Matches `max_intersections_np` for the usual cases:
+      • convex / concave monotone curves  (→ 2)
+      • S-shaped monotone curves          (→ 2 + #inflections)
+      • Wiggly curves with several extrema (→ #monotone-segments)
+    """
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    # ---- 1. first-derivative sign pattern --------------------------------
+    slopes = np.diff(y) / np.diff(x)
+    s1 = np.sign(slopes)
+    s1[s1 == 0] = 1                             # treat flats as tiny +ve slopes
+
+    mono_flips = np.count_nonzero(s1[:-1] * s1[1:] < 0)
+    monotone_segs = mono_flips + 1              # pieces of monotonicity
+
+    # ---- 2. if curve already has >1 monotone piece, that is the answer ---
+    if monotone_segs > 1:
+        return monotone_segs                    # matches EI curves, sin-waves…
+
+    # ---- 3. strictly monotone → look at inflections ----------------------
+    # 2nd-derivative (vectorised three-point formula, O[n])
+    curvature = (y[:-2] - 2*y[1:-1] + y[2:]) / (
+                  (x[1:-1] - x[:-2]) * (x[2:] - x[1:-1]) + eps)
+
+    s2 = np.sign(curvature)
+    s2[s2 == 0] = 1
+    inflips = np.count_nonzero(s2[:-1] * s2[1:] < 0)
+
+    # strictly-monotone convex/concave  → 2
+    # strictly-monotone S-shape        → 2 + (#inflections)
+    return 2 + inflips
+
+
+#============================================================================================
 
      
 # Example usage:
@@ -612,49 +755,53 @@ def demonstrate_with_example():
     # Generate example data with increasing wiggliness
     x = np.linspace(0, 10, 1000)
     
+    Y = []
     # Three curves with different levels of wiggliness
     y1 = np.sin(x)                    # Low wiggliness
     y2 = np.sin(x) + 0.5 * np.sin(3 * x)  # Medium wiggliness
     y3 = np.sin(x) + 0.5 * np.sin(3 * x) + 0.3 * np.sin(7 * x)  # High wiggliness
+    Y = [y1, y2, y3]
+    
+    # generate random curves
+    for i in range(7):
+        num_waves = random.randint(1, 5)
+        coeffs = [random.uniform(0.1, 1) for _ in range(num_waves)]
+        freqs = [random.uniform(1, 5) for _ in range(num_waves)]
+        y = np.zeros_like(x)
+        for c, f in zip(coeffs, freqs):
+            y += c * np.sin(f * x)
+        Y.append(y)
+    Y = np.array(Y)
     
     # Compute wiggliness scores
     num_trials = 100
     
-    # # Plot the curves
-    # score1, score2, score3 = 1,2,3
-    # plt.figure(figsize=(10, 6))
-    # plt.plot(x, y1, label=f"Low wiggliness (score={score1})")
-    # plt.plot(x, y2, label=f"Medium wiggliness (score={score2})")
-    # plt.plot(x, y3, label=f"High wiggliness (score={score3})")
-    # plt.legend()
-    # plt.title("Curves with Different Wiggliness Levels")
-    # plt.show()
-    
-
     func_list = [
         count_line_curve_intersections_vectorized,
         count_line_curve_intersections_vec,
         max_intersections_np,
-        max_intersections_cp,
-        max_intersections_torch,
-        max_intersections_numba,
+        curve_metric,
     ]
     
     for func in func_list:
         try:
             start_time = time.time()
-            score1 = func(x, y1, num_trials=num_trials)
-            score2 = func(x, y2, num_trials=num_trials)
-            score3 = func(x, y3, num_trials=num_trials)
+            # Call the function with the generated curves
+            for i, y in enumerate(Y):
+                score = func(x, y, num_trials=num_trials)
+                print(f"Wiggliness score for curve {i}: {score}")
             end_time = time.time()
-            print(f"Wiggliness scores:")
-            print(f"Curve 1 (low): {score1}")
-            print(f"Curve 2 (medium): {score2}")
-            print(f"Curve 3 (high): {score3}")
             print(f"Time taken for {func.__name__}: {end_time - start_time:.4f} seconds")
         except KeyboardInterrupt:
             print(f"Skipping {func.__name__} due to keyboard interrupt")
             continue
+        
+    plt.figure(figsize=(10, 6))
+    for i, y in enumerate(Y):
+        plt.plot(x, y, label=f"Curve {i+1}")
+    plt.legend()
+    plt.title("Curves with Different Wiggliness Levels")
+    plt.show()
         
 #===================================================================================================
 
@@ -970,8 +1117,8 @@ def demo_2d():
     
 
     func_list = [
-        max_line_intersections_gpu,
-        max_intersections_shared_gpu,
+        # max_line_intersections_gpu,
+        # max_intersections_shared_gpu,
         max_intersections_shared_np,
         # max_line_intersections_numba_multi,
         # max_intersections_np,
@@ -1000,5 +1147,5 @@ def demo_2d():
 
 if __name__ == "__main__":
     # Demonstration
-    # demonstrate_with_example()
-    demo_2d()
+    demonstrate_with_example()
+    # demo_2d()
