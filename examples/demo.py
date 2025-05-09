@@ -71,7 +71,7 @@ data_file = 'dataset1.txt'
 X_feats, Y_curves = load_example_dataset(os.path.join(data_dir, data_file))
 
 # synthetic data
-X_feats, Y_curves =  generate_learning_curves(50, 50)
+# X_feats, Y_curves =  generate_learning_curves(50, 50)
 
 num_inputs, num_outputs = Y_curves.shape
 log(f'Y_curves.shape={Y_curves.shape} (num_inputs={num_inputs} checkpoints, num_outputs={num_outputs} tasks)')
