@@ -39,7 +39,7 @@
   
   <h3 id="learning-curve-optimization">(Average) Learning Curve Optimization</h3>
   
-  <p>Problem setup: we have a set of model checkpoints saved periodically during training (usually saved at equally spaced intervals but this is not a requirement). In addition, we have a set of benchmark tasks we can run on a model to get a score. If we chose a single benchmark and ran it on all model checkpoints and then plotted these, with checkpoint number on the x-axis and benchmark score on the y-axis, we would get a <em>learning curve</em> showing how the model improves during training, and then starts to degrade. Typically we are interested in finding the model checkpoint at the peak of this curve. Since the performance data can be noisy, it's often better to maximize a smoothed version (see below image).</p>
+  <p>Suppose we have a set of model checkpoints saved periodically during training (usually saved at equally spaced intervals but this is not a requirement). In addition, we have a set of benchmark tasks we can run on a model to get a score. If we chose a single benchmark and ran it on all model checkpoints and then plotted these, with checkpoint number on the x-axis and benchmark score on the y-axis, we would get a <em>learning curve</em> showing how the model improves during training, and then starts to degrade. Typically we are interested in finding the model checkpoint at the peak of this curve. Since the performance data can be noisy, it's often better to maximize a smoothed version (see below image).</p>
   
   <div style="display: flex; justify-content: center; margin: 20px 0;">
     <img src="bench1.png" alt="Learning curve for benchmark 1" style="max-width: 75%; height: auto;">
