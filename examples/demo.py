@@ -9,8 +9,8 @@ from glob import glob
 from scipy import ndimage
 
 from bomax.sampler import MultiTaskSampler
-from bomax.utils import load_example_dataset
-from synthetic import generate_learning_curves
+from bomax.utils import load_example_dataset, generate_learning_curves
+
 
 torch.set_default_dtype(torch.float64)
 plt.ioff()
@@ -21,7 +21,7 @@ plt.ioff()
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 data_dir = os.path.join(parent_dir, 'data')
-run_base = os.path.join(current_dir, 'runs')
+run_base = os.path.join(parent_dir, 'runs')
 
 # Create runs directory if it doesn't exist
 os.makedirs(run_base, exist_ok=True)
