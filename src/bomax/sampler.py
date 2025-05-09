@@ -319,11 +319,12 @@ class MultiTaskSampler:
                 self.logger.error(f'Error in loss calculation at iteration {i}:\n{e}')
                 #------------------------------------------------------------------
                 self.min_iterations = max(self.min_iterations, i//2)
-                x = np.array(degree_condition.history)
-                # get last index where x <= degree_thresh
-                last_idx = np.where(x <= degree_thresh)[0][-1] if len(x) > 0 else 0
-                if last_idx > 0:
-                    self.min_iterations = degree_condition.iterations[last_idx]
+                try:
+                    last_idx = np.where( np.array(degree_condition.history) <= degree_thresh)[0][-1]
+                    if last_idx > 0:
+                        self.min_iterations = degree_condition.iterations[last_idx] 
+                except Exception as e:
+                    pass
                 #------------------------------------------------------------------
                 return False
             
