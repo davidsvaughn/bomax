@@ -21,7 +21,7 @@ from gpytorch.priors import LKJCovariancePrior, SmoothedBoxPrior
 
 from .normalize import Transform
 from .initialize import init_samples
-from .degree import degree_metric, maximum_degree
+from .degree import maximum_degree
 from .stopping import StoppingCondition, StoppingConditions
 from .utils import display_fig, to_numpy, log_h, clear_cuda_tensors
 
@@ -288,8 +288,7 @@ class MultiTaskSampler:
         
             # function closure for degree metric
             def degree_func(**kwargs):
-                # return degree_metric(model=self.model, X_inputs=self.X_inputs, m=self.m, num_trials=100)['max']
-                return maximum_degree(model=self.model, X_inputs=self.X_inputs, m=self.m, num_trials=100)['max']
+                return maximum_degree(model=self.model, X_inputs=self.X_inputs, m=self.m)['max']
             
             degree_condition = StoppingCondition(
                 value=degree_func,
