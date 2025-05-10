@@ -1,7 +1,7 @@
 # BOMAX: Bayesian Optimization for Maximizing LLM Learning Curves
 
 <p align="center">
-  <img src="docs/bomax_8404.gif" width="90%" /> 
+  <img src="docs/bomax_8404.gif" width="98%" /> 
 </p>
 
 ### Using Mult-task Gaussian Process Regression to maximize *average benchmark score* across a sequence of LLM training checkpoints
